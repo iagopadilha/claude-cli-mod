@@ -1,0 +1,11 @@
+{
+  "name": "iagopadilha-mods",
+  "owner": { "name": "iagopadilha" },
+  "plugins": [
+    {
+      "name": "claude-cli-mod",
+      "source": "./plugins/claude-cli-mod",
+      "description": "claude-cli-mod menu: Zen mode, Claude Code themes, effort and mode controls, status line."
+    }
+  ]
+}

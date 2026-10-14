@@ -1,0 +1,7 @@
+{
+  "name": "claude-cli-mod",
+  "version": "0.5.0",
+  "description": "A claude-cli-mod menu in the bottom corner: Zen mode with a progress band, Claude Code themes from terminalcolors.com, model, effort and permission mode controls and a status line.",
+  "author": { "name": "iagopadilha" },
+  "types": "./types/index.d.ts"
+}
