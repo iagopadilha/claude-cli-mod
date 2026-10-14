@@ -84,7 +84,7 @@ const statusClock = atom({ plugin: 'claude-cli-mod', key: 'statusClock' } as con
 const ZEN_TOOL = 'mcp__claude-cli-mod__zen_progress'
 
 const PANE = 'claude-tools'
-const PANE_SIZE = { rows: 24, columns: 48 }
+const PANE_SIZE = { rows: 26, columns: 48 }
 // Used until the terminal's own background is known: just short of pure black.
 const PANE_BACKGROUND = '#0b0b0b'
 const MENU_NAME = 'claude-cli-mod'
@@ -726,10 +726,10 @@ async function toggleMenu($: EngineInterface, panel: Panel = 'zen') {
 
 // The theme list scrolls on its own, inside a pane exactly the body's height,
 // so the tabs above it and the language row under it stay where they are.
-// Rows the themes page takes besides the list: the tab strip (5, spaced), the kept
+// Rows the themes page takes besides the list: the title and tab strip (7, spaced), the kept
 // theme, the search, the actions, a status line while there is one, the
 // language footer (7, spaced), and one spare in case a row wraps.
-const listRows = (bodyRows: number, hasStatus: boolean) => Math.max(3, bodyRows - (5 + 3 + (hasStatus ? 1 : 0) + 7 + 1))
+const listRows = (bodyRows: number, hasStatus: boolean) => Math.max(3, bodyRows - (7 + 3 + (hasStatus ? 1 : 0) + 7 + 1))
 
 async function foundThemes($: EngineInterface) {
   const query = (await read($, themeQuery)).trim().toLowerCase()
@@ -758,8 +758,8 @@ async function setLang($: EngineInterface, next: Lang) {
 
 const TABS: readonly { panel: Exclude<Panel, 'main'>; name: Phrase }[] = [
   { panel: 'zen', name: 'tabZen' },
-  { panel: 'themes', name: 'tabThemes' },
   { panel: 'mode', name: 'tabMode' },
+  { panel: 'themes', name: 'tabThemes' },
   { panel: 'status', name: 'tabStatus' },
 ]
 
@@ -812,7 +812,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
   )
   const heading = (text: string, extra?: RenderChildren) => (
     <Box key={`h-${text}`} marginTop={2} marginBottom={1} gap={1}>
-      <Text dimColor>{text}</Text>
+      <Text dimColor bold>{`╴ ${text.toUpperCase()}`}</Text>
       {extra}
     </Box>
   )
@@ -1052,6 +1052,10 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
   // Tabs: plain words, the chosen one in the accent color and underlined.
   const tabStrip = (
     <Box key="tabs" flexDirection="column" marginTop={1}>
+      <Box justifyContent="space-between" marginBottom={1}>
+        <Text bold color="claude">{'✦ claude-cli-mod'}</Text>
+        <Button key="tools-close" plain dimColor label={` ${t('close')} `} onPress={() => toggleMenu($)} />
+      </Box>
       <Box columnGap={2} marginBottom={1}>
         {TABS.map(({ panel: p, name }) => {
           const isOn = p === tab
@@ -1067,8 +1071,6 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
             </Button>
           )
         })}
-        <Box flexGrow={1} />
-        <Button key="tools-close" plain dimColor label={` ${t('close')} `} onPress={() => toggleMenu($)} />
       </Box>
       {rule}
     </Box>
