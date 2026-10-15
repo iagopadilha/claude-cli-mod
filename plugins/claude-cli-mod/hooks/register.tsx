@@ -84,6 +84,8 @@ const ZEN_TOOL = 'mcp__claude-cli-mod__zen_progress'
 
 const PANE = 'claude-tools'
 const PANE_SIZE = { rows: 15, columns: 48 }
+// The menu's content is no wider than this, left-aligned in the pane's frame.
+const CONTENT_COLUMNS = 64
 // Body rows each page needs, so the pane is no taller than its content.
 const PAGE_ROWS: Record<Panel, number> = { main: 10, zen: 10, mode: 16, themes: 15, status: 11 }
 const paneSize = (panel: Panel) => ({ rows: PAGE_ROWS[panel], columns: PANE_SIZE.columns })
@@ -852,7 +854,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
   const lng = await read($, lang)
   const t = (key: Phrase, vars?: Record<string, string | number>) => phrase(lng, key, vars)
   const background = (await read($, paneBg)) ?? PANE_BACKGROUND
-  const columns = e.props.bodyColumns ?? PANE_SIZE.columns
+  const columns = Math.min(e.props.bodyColumns ?? PANE_SIZE.columns, CONTENT_COLUMNS)
   const rule = <Text dimColor>{'─'.repeat(Math.max(10, columns - 2))}</Text>
 
   // A chip: a framed button, the chosen one framed and written in the accent
@@ -1182,7 +1184,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
     <Box
       flexDirection="column"
       paddingX={1}
-      width={e.props.bodyColumns}
+      width={columns}
       height={isThemes ? e.props.scroll.bodyRows + 1 : undefined}
       minHeight={isThemes ? undefined : e.props.scroll.bodyRows + 1}
     >
