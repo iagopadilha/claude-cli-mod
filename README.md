@@ -5,6 +5,10 @@ progresso compacta que acompanha o que o Claude está fazendo, passo a passo.
 
 Mantido por [iagopadilha](https://github.com/iagopadilha).
 
+> **Recomendado: use o TUI em tela cheia (fullscreen) do Claude Code.** É onde o mod funciona da melhor
+> maneira: o painel do `/tools` fica encaixado ao lado da transcrição, a largura pedida é respeitada e a faixa do
+> Zen acompanha o trabalho. O TUI padrão tem as limitações listadas abaixo.
+
 ## O que faz
 
 - **Menu `/tools`** com quatro abas: Zen, Mode, Theme e Status e Config. Cada seção mostra o valor atual
@@ -57,8 +61,8 @@ sobe conforme os passos são concluídos. A faixa mostra os próximos 5 passos p
 
 ## Limitações conhecidas
 
-Este plugin foi desenvolvido e testado no **TUI padrão** do Claude Code, e é nele que as limitações abaixo
-aparecem. Eles vêm do próprio Claude Code, não do plugin:
+As limitações abaixo aparecem no **TUI padrão** do Claude Code e vêm do próprio Claude Code, não do plugin.
+Para o melhor resultado, use o **TUI em tela cheia (fullscreen)**:
 
 - **Suporte limitado ao painel do `/tools` no TUI padrão.** O menu é um painel do Claude Code, e esse modo tem
   suporte reduzido a painéis. Não há uso de mouse, então a navegação é só pelo teclado.
@@ -71,8 +75,8 @@ aparecem. Eles vêm do próprio Claude Code, não do plugin:
 - **`[-]` no canto da faixa do Zen.** Esse controle é do Claude Code. Para recolher os passos, use `/zen hide`.
 - **A faixa depende do Claude.** Ela só se move quando o Claude chama `zen_progress`. Se ele pular uma
   atualização, a barra pula junto.
-- **Modo tela cheia (fullscreen).** Pela documentação da API de mods, o painel fica encaixado ao lado da
-  transcrição e a largura pedida é respeitada. Esse modo não foi testado.
+- **Modo tela cheia (fullscreen): recomendado.** O painel fica encaixado ao lado da transcrição e a largura
+  pedida é respeitada. É o modo em que o mod funciona melhor.
 
 ## Desenvolvimento
 
