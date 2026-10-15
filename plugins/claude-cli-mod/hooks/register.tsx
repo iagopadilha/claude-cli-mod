@@ -40,7 +40,6 @@ import {
   percentOf,
   RAINBOW,
   stepLabel,
-  visibleSteps,
   ZEN_PROMPT,
   ZEN_TOOL_DESCRIPTION,
   ZEN_TOOL_NAME,
@@ -638,8 +637,12 @@ async function drawZenBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   const clock = await read($, now)
   const { Box, Text } = $.ui.resolve(e)
 
+  const lng = await read($, lang)
   const percent = percentOf(t)
-  const mark = t.doneAt !== null ? '✓' : '✶'
+  const isDone = t.doneAt !== null
+  const mark = isDone ? '✓' : '✶'
+  // The same color the menu's swatch shows; rainbow paints the title letter by letter.
+  const accent = theme === 'rainbow' ? undefined : colors.bar
   const { filled, runs } = barCells(theme, colors.bar, 10, percent)
   const meter = (
     <Text>
@@ -649,32 +652,41 @@ async function drawZenBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
       <Text dimColor>{'▱'.repeat(10 - filled)}</Text>
     </Text>
   )
-  // Compact: finished steps are folded into the step label, so the rows left are
-  // the one running and the next few; /zen hide leaves only the first line.
-  const pending = isCollapsed ? [] : visibleSteps(t).filter(step => step.status !== 'completed')
-  const rest = pending.slice(0, 3)
-  const hidden = isCollapsed ? 0 : t.steps.filter(step => step.status !== 'completed').length - rest.length
+  const title =
+    theme === 'rainbow' ? (
+      <Text bold wrap="truncate">
+        {mark}{' '}
+        {rainbow(t.title).map(({ ch, color }) => (
+          <Text color={color}>{ch}</Text>
+        ))}
+      </Text>
+    ) : (
+      <Text color={accent} bold wrap="truncate">
+        {mark} {t.title}
+      </Text>
+    )
+  // Every step still to do is listed; only a long plan is cut, with a count of
+  // what is left. Finished steps are in the step label, and a finished task is one line.
+  const todo = isDone || isCollapsed ? [] : t.steps.filter(step => step.status !== 'completed')
+  const rest = todo.length > 6 ? todo.slice(0, 5) : todo
+  const hidden = todo.length - rest.length
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box gap={1}>
-        <Box flexShrink={1}>
-          <Text color={colors.text} bold wrap="truncate">
-            {mark} {t.title}
-          </Text>
-        </Box>
+        <Box flexShrink={1}>{title}</Box>
         {meter}
-        <Text color={colors.text} bold>{`${percent}%`}</Text>
+        <Text color={accent} bold>{`${percent}%`}</Text>
         <Text dimColor>{`${stepLabel(t)} · ${elapsed((t.doneAt ?? clock) - t.startedAt)}`}</Text>
       </Box>
       {rest.map(step => {
         const isNow = step.status === 'in_progress'
         return (
-          <Text key={`step-${step.id}`} color={isNow ? colors.text : undefined} bold={isNow} dimColor={!isNow} wrap="truncate">
+          <Text key={`step-${step.id}`} color={isNow ? accent : undefined} bold={isNow} dimColor={!isNow} wrap="truncate">
             {isNow ? '◉' : '○'} {step.text}
           </Text>
         )
       })}
-      {hidden > 0 && <Text dimColor>{`… ${hidden}`}</Text>}
+      {hidden > 0 && <Text dimColor>{phrase(lng, 'moreTasks', { n: hidden })}</Text>}
     </Box>
   )
 }
