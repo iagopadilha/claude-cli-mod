@@ -973,7 +973,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
         <Box key="themes-current" justifyContent="space-between" gap={1} flexShrink={0}>
           <Text wrap="truncate">
             <Text dimColor>{t('kept')} </Text>
-            <Text bold>{(await read($, themeName)) ?? t('terminalDefault')}</Text>
+            <Text bold>{(await read($, themeName)) ?? t('claudeDefault')}</Text>
           </Text>
           <Text dimColor>{top > 0 || below > 0 ? `${top + 1}–${Math.min(found.length, top + shown)}/${found.length}` : ''}</Text>
         </Box>,
@@ -986,7 +986,11 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
           onSubmit={value => update($, themeQuery, () => value).then(() => update($, themeScroll, () => 0))}
         />,
         <Box key="themes-actions" columnGap={2} flexWrap="wrap" flexShrink={0}>
-          <Button key={reg('themes-reset')} plain dimColor label={t('defaultTheme')} onPress={themeAction($, () => applyTheme($, null))} />
+          <Button key={reg('themes-reset')} plain label={t('defaultTheme')} onPress={themeAction($, () => applyTheme($, null))}>
+            <Text bold={kept === null} dimColor={kept !== null} color={kept === null ? 'claude' : undefined}>
+              {kept === null ? `✓ ${t('defaultTheme')}` : t('defaultTheme')}
+            </Text>
+          </Button>
           <Button key={reg('themes-refresh')} plain dimColor label={t('downloadAgain')} onPress={themeAction($, () => downloadThemes($))} />
         </Box>,
       )
