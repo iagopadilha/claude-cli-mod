@@ -709,16 +709,6 @@ async function drawZenBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   )
 }
 
-// Diagnostic: the last key events the menu received, in ~/.claude/claude-cli-mod/keys.log.
-const keyLog: string[] = []
-async function logKey($: EngineInterface, line: string) {
-  keyLog.push(`${new Date().toISOString().slice(11, 23)} ${line}`)
-  if (keyLog.length > 60) keyLog.shift()
-  try {
-    await $.fs.write(`${await homeDir($)}/.claude/claude-cli-mod/keys.log`, `${keyLog.join('\n')}\n`)
-  } catch {}
-}
-
 // The visual row a focusable element sits in. Elements drawn side by side share
 // one; every other element is a row of its own.
 function rowOf(key: string) {
@@ -1541,7 +1531,6 @@ export const register: Register = on => {
   // Themes: the wheel and the scroll keys move the theme list's own window,
   // never the pane, so the tabs and the language row stay put.
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    void logKey($, `scroll by=${e.by} offset=${e.offset} pointer=${e.pointer === undefined ? 'none' : 'yes'} from=${focusedKey}`)
     // The menu's own reveal of the focused element (see ui.focus): let it move the window.
     if (e.origin.kind === 'plugin') return next(e)
     // An arrow key reaches here as a one-row scroll with no pointer (a wheel tick
@@ -1561,7 +1550,6 @@ export const register: Register = on => {
   // Themes: the focus ring stepping onto a theme past either end of the
   // window brings it into view.
   on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    void logKey($, `focus from=${focusedKey} to=${e.element ?? '(engine stop)'} origin=${e.origin.kind}`)
     const moved = await next(e)
     if (moved.deny === undefined) focusedKey = e.element ?? null
     // The window follows the focus ring, so an element below the fold is shown

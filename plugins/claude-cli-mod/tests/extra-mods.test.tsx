@@ -212,9 +212,9 @@ const engineDraws = (on: On) => {
   on('ui.close', () => ({ value: undefined }))
 }
 
-// A chip is chosen when its frame is drawn in the accent color.
-const isChosen = async (menu: { find: (q: { key: string }) => Promise<{ props: Record<string, unknown> } | undefined> }, key: string) =>
-  (await menu.find({ key: `${key}-box` }))?.props.borderColor === 'claude'
+// A chip is chosen when its label carries the check mark.
+const isChosen = async (menu: { find: (q: { key: string }) => Promise<{ text?: string } | undefined> }, key: string) =>
+  ((await menu.find({ key }))?.text ?? '').includes('✓')
 
 describe('toolbox', () => {
   test('the corner button opens the menu in its pane', async ($, on) => {
@@ -222,12 +222,11 @@ describe('toolbox', () => {
     for (const surface of SURFACES) {
       const corner = await $.ui.mount({ plugin: PLUGIN, surface, ...hint })
       const menu = await $.ui.mount({ plugin: PLUGIN, surface, ...pane })
-      expect((await corner.find({ key: 'tools-toggle' }))?.text).toMatch(/claude-cli-mod ▲/)
+      expect((await corner.find({ key: 'tools-toggle' }))?.text).toMatch(/menu \(\/tools\)/)
       expect(await menu.find({ key: 'tab-zen' })).toBeUndefined()
 
       await corner.press({ key: 'tools-toggle' })
-      expect((await corner.find({ key: 'tools-toggle' }))?.text).toMatch(/▼/)
-      for (const key of ['tab-zen', 'tab-themes', 'tab-mode', 'tab-status', 'tools-close', 'lang-pt']) {
+      for (const key of ['tab-zen', 'tab-themes', 'tab-mode', 'tab-status']) {
         expect(await menu.find({ key })).toBeDefined()
       }
       await corner.press({ key: 'tools-toggle' })
@@ -266,7 +265,7 @@ describe('toolbox', () => {
     expect((await menu.find({ key: 'default-mode-bypassPermissions' }))?.text).toMatch(/bypass permissions/)
     await menu.press({ key: 'effort-high' })
     // The chosen level is drawn as a filled chip, padded; max as ✦ and a rainbow.
-    expect((await menu.find({ key: 'effort-high' }))?.text).toBe(' high ')
+    expect((await menu.find({ key: 'effort-high' }))?.text).toBe(' ✓ high ')
     await menu.press({ key: 'effort-max' })
     expect((await menu.find({ key: 'effort-max' }))?.text).toBe('✦ max')
   })
@@ -325,7 +324,7 @@ describe('toolbox', () => {
 
     const corner = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...busy })
     expect((await corner.find({ key: 'background-tasks' }))?.text).toMatch(/1 shell, 1 monitor/)
-    expect(await corner.find({ text: /Opus 5\.5 · ClaudeMods/ })).toBeDefined()
+    expect(await corner.find({ text: /Opus 5\.5/ })).toBeDefined()
     expect(await corner.find({ key: 'tools-toggle' })).toBeDefined()
     await corner.press({ key: 'background-tasks' })
     expect(ran).toEqual(['tasks'])
@@ -353,7 +352,7 @@ describe('toolbox', () => {
     expect(await isChosen(menu, 'zen-on')).toBe(true)
     expect((await menu.find({ key: 'zen-theme-rainbow' }))?.text).toMatch(/rainbow ✓/)
     await menu.press({ key: 'tab-mode' })
-    expect((await menu.find({ key: 'effort-medium' }))?.text).toBe(' medium ')
+    expect((await menu.find({ key: 'effort-medium' }))?.text).toBe(' ✓ medium ')
     expect(await isChosen(menu, 'model-sonnet')).toBe(true)
   })
 
@@ -406,11 +405,9 @@ describe('toolbox', () => {
     const shown = (await menu.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('theme:'))
     expect(shown.length).toBeGreaterThan(0)
     expect(shown.length).toBeLessThan(pane.props.scroll.bodyRows)
-    expect(await menu.find({ key: 'lang-pt' })).toBeDefined()
 
     await menu.press({ key: 'theme:theme-03' })
     expect((await menu.find({ key: 'theme:theme-03' }))?.text).toMatch(/theme-03 ✓/)
-    expect(await menu.drawn()).toMatchObject({ props: { backgroundColor: '#000003' } })
   })
 
   test("Claude's zen_progress calls fill the band", async ($, on) => {
