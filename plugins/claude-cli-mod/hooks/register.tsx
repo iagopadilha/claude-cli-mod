@@ -646,7 +646,9 @@ async function drawZenBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   const mark = isDone ? '✓' : '✶'
   // The same color the menu's swatch shows; rainbow paints the title letter by letter.
   const accent = theme === 'rainbow' ? undefined : colors.bar
-  const { filled, runs } = barCells(theme, colors.bar, 10, percent)
+  // No animation running (a reload, a redraw): the bar is where the percent is.
+  if (barTimer === undefined) shownBar = percent
+  const { filled, runs } = barCells(theme, colors.bar, 10, shownBar)
   const meter = (
     <Text>
       {runs.map(r => (
@@ -1357,16 +1359,54 @@ function stopTicker() {
   ticker = undefined
 }
 
-// Puts a fresh task on the band and starts its clock.
-async function startTask($: EngineInterface, title: string) {
-  const startedAt = await $.clock.now()
-  const fresh: ZenTask = { title, startedAt, doneAt: null, steps: [] }
-  await update($, task, () => fresh)
-  await update($, now, () => startedAt)
+function startTicker($: EngineInterface) {
   stopTicker()
   ticker = $.clock.every(1000, () => {
     void $.clock.now().then(t => update($, now, () => t))
   })
+}
+
+// The bar's fill, in percent, as drawn: it walks to the real percent a tenth at a
+// time, so a step finishing fills the bar where it can be seen instead of jumping.
+let shownBar = 0
+let barTimer: Timer | undefined
+
+function fillBar($: EngineInterface, target: number) {
+  barTimer?.cancel()
+  barTimer = $.clock.every(120, () => {
+    shownBar = shownBar < target ? Math.min(target, shownBar + 10) : Math.max(target, shownBar - 10)
+    void $.clock.now().then(t => update($, now, () => t))
+    if (shownBar === target) {
+      barTimer?.cancel()
+      barTimer = undefined
+    }
+  })
+}
+
+async function syncBar($: EngineInterface) {
+  const current = await read($, task)
+  if (current !== null) fillBar($, percentOf(current))
+}
+
+// A task marked done too early (a subagent's end, an interrupt) comes back to life
+// when Claude sends more progress: the band never stays at 100% while steps are left.
+async function reopenIfDone($: EngineInterface) {
+  const current = await read($, task)
+  if (current === null || current.doneAt === null) return
+  await update($, task, t => (t === null ? t : { ...t, doneAt: null }))
+  startTicker($)
+}
+
+// Puts a fresh task on the band and starts its clock.
+async function startTask($: EngineInterface, title: string) {
+  const startedAt = await $.clock.now()
+  const fresh: ZenTask = { title, startedAt, doneAt: null, steps: [] }
+  barTimer?.cancel()
+  barTimer = undefined
+  shownBar = 0
+  await update($, task, () => fresh)
+  await update($, now, () => startedAt)
+  startTicker($)
 }
 
 // The kept settings, back into the session's values: at the session's start,
@@ -1599,9 +1639,11 @@ export const register: Register = on => {
       return typeof step.text === 'string' ? [{ id: `zen-${i}`, text: step.text, status: asStatus(step.status) }] : []
     })
     if ((await read($, task)) === null) await startTask($, '')
+    await reopenIfDone($)
     await update($, task, t =>
       t === null ? t : { ...t, title: typeof input.title === 'string' && input.title !== '' ? input.title : t.title, steps },
     )
+    await syncBar($)
     const t = await read($, task)
     const done = steps.filter(s => s.status === 'completed').length
     return { result: `Progress band updated: ${done} of ${steps.length} steps done (${t === null ? 0 : percentOf(t)}%).` }
@@ -1613,7 +1655,9 @@ export const register: Register = on => {
       text: todo.status === 'in_progress' ? todo.activeForm || todo.content : todo.content,
       status: asStatus(todo.status),
     }))
+    await reopenIfDone($)
     await update($, task, t => (t === null ? t : { ...t, steps }))
+    await syncBar($)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -1622,7 +1666,9 @@ export const register: Register = on => {
     const id = (ran.result as { task?: { id?: string } } | undefined)?.task?.id
     if (id !== undefined) {
       const step: ZenStep = { id, text: e.subject, status: 'pending' }
+      await reopenIfDone($)
       await update($, task, t => (t === null ? t : { ...t, steps: [...t.steps.filter(s => s.id !== id), step] }))
+      await syncBar($)
     }
     return ran
   }).catch(($, e, next) => next(e))
@@ -1630,6 +1676,7 @@ export const register: Register = on => {
   on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError === true) return ran
+    await reopenIfDone($)
     await update($, task, t => {
       if (t === null) return t
       if (e.status === 'deleted') return { ...t, steps: t.steps.filter(s => s.id !== e.taskId) }
@@ -1638,16 +1685,20 @@ export const register: Register = on => {
       )
       return { ...t, steps }
     })
+    await syncBar($)
     return ran
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
+    // A subagent's end is not the end of the task on the band.
+    if ((e as { agentId?: string }).agentId !== undefined) return next(e)
     stopTicker()
     const current = await read($, task)
     if (current !== null && current.doneAt === null) {
       const doneAt = await $.clock.now()
       await update($, task, t => (t === null ? t : { ...t, doneAt }))
       await update($, now, () => doneAt)
+      fillBar($, 100)
       // "Done" stays up for a moment, then the band clears.
       $.clock.after(8000, () => {
         void update($, task, t => (t !== null && t.doneAt === doneAt ? null : t))
