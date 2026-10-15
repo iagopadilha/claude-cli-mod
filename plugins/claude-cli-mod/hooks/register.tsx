@@ -52,7 +52,7 @@ import {
 // mirrored to $.store under the same key.
 const menu = atom({ plugin: 'claude-cli-mod', key: 'menu' } as const, null)
 const zenOn = atom({ plugin: 'claude-cli-mod', key: 'zenOn' } as const, false)
-const zenTheme = atom({ plugin: 'claude-cli-mod', key: 'zenTheme' } as const, 'blue')
+const zenTheme = atom({ plugin: 'claude-cli-mod', key: 'zenTheme' } as const, 'green')
 const zenCustom = atom(
   { plugin: 'claude-cli-mod', key: 'zenCustom' } as const,
   { bar: '#3b82f6', text: '#e2e8f0', border: '#3b82f6' } satisfies ZenColors,
@@ -84,7 +84,7 @@ const statusClock = atom({ plugin: 'claude-cli-mod', key: 'statusClock' } as con
 const ZEN_TOOL = 'mcp__claude-cli-mod__zen_progress'
 
 const PANE = 'claude-tools'
-const PANE_SIZE = { rows: 26, columns: 48 }
+const PANE_SIZE = { rows: 15, columns: 48 }
 // Used until the terminal's own background is known: just short of pure black.
 const PANE_BACKGROUND = '#0b0b0b'
 const MENU_NAME = 'claude-cli-mod'
@@ -143,6 +143,12 @@ async function setZenOn($: EngineInterface, isOn: boolean) {
   await update($, zenOn, () => isOn)
   await $.store.set('zenOn', isOn)
   if (!isOn) await update($, task, () => null)
+}
+
+// Hides or shows the subtasks inside the band; the band itself stays.
+async function setZenCollapsed($: EngineInterface, isCollapsed: boolean) {
+  await update($, zenCollapsed, () => isCollapsed)
+  await $.store.set('zenCollapsed', isCollapsed)
 }
 
 async function setZenTheme($: EngineInterface, theme: ZenTheme) {
@@ -528,11 +534,16 @@ async function loadSettings($: EngineInterface) {
     zenOn: (await $.store.get('zenOn')) as boolean | undefined,
     zenTheme: (await $.store.get('zenTheme')) as ZenTheme | undefined,
     zenCustom: (await $.store.get('zenCustom')) as ZenColors | undefined,
+    zenCollapsed: (await $.store.get('zenCollapsed')) as boolean | undefined,
     effort: (await $.store.get('effort')) as Effort | undefined,
     lang: await $.store.get('lang'),
   }
   if (saved.zenOn !== undefined) await update($, zenOn, () => saved.zenOn!)
-  if (saved.zenTheme !== undefined && ZEN_THEMES.includes(saved.zenTheme)) await update($, zenTheme, () => saved.zenTheme!)
+  // Green is the default; 'blue' was the old default, so a saved 'blue' is not a choice.
+  if (saved.zenTheme !== undefined && saved.zenTheme !== 'blue' && ZEN_THEMES.includes(saved.zenTheme)) {
+    await update($, zenTheme, () => saved.zenTheme!)
+  }
+  if (saved.zenCollapsed === true) await update($, zenCollapsed, () => true)
   if (saved.zenCustom !== undefined) await update($, zenCustom, () => saved.zenCustom!)
   if (saved.effort !== undefined && EFFORTS.includes(saved.effort)) await update($, effort, () => saved.effort!)
   if (isLang(saved.lang)) await update($, lang, () => saved.lang as Lang)
@@ -621,79 +632,88 @@ async function drawZenBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   const colors = colorsFor(theme, await read($, zenCustom))
   const isCollapsed = await read($, zenCollapsed)
   const clock = await read($, now)
-  const { Box, Text, Button } = $.ui.resolve(e)
+  const { Box, Text } = $.ui.resolve(e)
 
-  const columns = Math.max(30, e.props.bodyColumns ?? 80)
   const percent = percentOf(t)
   const mark = t.doneAt !== null ? '✓' : '✶'
-  const width = Math.max(8, columns - 6 - 16 - 8 - (isCollapsed ? Math.min(30, t.title.length + 2) : 0))
-  const { filled, runs } = barCells(theme, colors.bar, width, percent)
-  const bar = (
-    <Box>
+  const { filled, runs } = barCells(theme, colors.bar, 10, percent)
+  const meter = (
+    <Text>
       {runs.map(r => (
-        <Text color={r.color}>{'━'.repeat(r.cells)}</Text>
+        <Text color={r.color}>{'▰'.repeat(r.cells)}</Text>
       ))}
-      <Text dimColor>{'─'.repeat(width - filled)}</Text>
-    </Box>
+      <Text dimColor>{'▱'.repeat(10 - filled)}</Text>
+    </Text>
   )
-  const toggle = (
-    <Button
-      key="zen-collapse"
-      plain
-      dimColor
-      label={isCollapsed ? '[+]' : '[–]'}
-      onPress={() => update($, zenCollapsed, c => !c)}
-    />
-  )
-
-  if (isCollapsed) {
-    return (
-      <Box borderStyle="round" borderColor={colors.border} paddingX={2} gap={2}>
-        <Box width={Math.min(30, t.title.length + 2)}>
+  // Compact: finished steps are folded into the step label, so the rows left are
+  // the one running and the next few; /zen hide leaves only the first line.
+  const pending = isCollapsed ? [] : visibleSteps(t).filter(step => step.status !== 'completed')
+  const rest = pending.slice(0, 3)
+  const hidden = isCollapsed ? 0 : t.steps.filter(step => step.status !== 'completed').length - rest.length
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Box gap={1}>
+        <Box flexShrink={1}>
           <Text color={colors.text} bold wrap="truncate">
             {mark} {t.title}
           </Text>
         </Box>
-        {bar}
-        <Text color={colors.text} bold>{`${percent}%`.padStart(4)}</Text>
-        {toggle}
+        {meter}
+        <Text color={colors.text} bold>{`${percent}%`}</Text>
+        <Text dimColor>{`${stepLabel(t)} · ${elapsed((t.doneAt ?? clock) - t.startedAt)}`}</Text>
       </Box>
-    )
-  }
-
-  const shown = visibleSteps(t)
-  return (
-    <Box flexDirection="column" borderStyle="round" borderColor={colors.border} paddingX={2}>
-      <Box justifyContent="space-between" gap={1} marginBottom={1}>
-        <Text color={colors.text} bold wrap="truncate">
-          {mark} {t.title}
-        </Text>
-        <Box gap={1} flexShrink={0}>
-          <Text dimColor>{elapsed((t.doneAt ?? clock) - t.startedAt)}</Text>
-          {toggle}
-        </Box>
-      </Box>
-      <Box gap={2} marginBottom={1}>
-        <Text dimColor>{stepLabel(t).padEnd(14)}</Text>
-        {bar}
-        <Text color={colors.text} bold>{`${percent}%`.padStart(4)}</Text>
-      </Box>
-      {shown.map(step => {
+      {rest.map(step => {
         const isNow = step.status === 'in_progress'
         return (
-          <Box key={`step-${step.id}`} justifyContent="space-between" gap={1}>
-            <Text color={isNow ? colors.text : undefined} bold={isNow} dimColor={step.status === 'pending'} wrap="truncate">
-              {step.status === 'completed' ? '●' : isNow ? '◉' : '○'} {step.text}
-            </Text>
-            <Text color={isNow ? colors.text : undefined} dimColor={!isNow}>
-              {step.status === 'completed' ? 'Done' : isNow ? 'Working' : 'Next'}
-            </Text>
-          </Box>
+          <Text key={`step-${step.id}`} color={isNow ? colors.text : undefined} bold={isNow} dimColor={!isNow} wrap="truncate">
+            {isNow ? '◉' : '○'} {step.text}
+          </Text>
         )
       })}
-      {t.steps.length > shown.length && <Text dimColor>{t.steps.length - shown.length} more</Text>}
+      {hidden > 0 && <Text dimColor>{`… ${hidden}`}</Text>}
     </Box>
   )
+}
+
+// Diagnostic: the last key events the menu received, in ~/.claude/claude-cli-mod/keys.log.
+const keyLog: string[] = []
+async function logKey($: EngineInterface, line: string) {
+  keyLog.push(`${new Date().toISOString().slice(11, 23)} ${line}`)
+  if (keyLog.length > 60) keyLog.shift()
+  try {
+    await $.fs.write(`${await homeDir($)}/.claude/claude-cli-mod/keys.log`, `${keyLog.join('\n')}\n`)
+  } catch {}
+}
+
+// The visual row a focusable element sits in. Elements drawn side by side share
+// one; every other element is a row of its own.
+function rowOf(key: string) {
+  if (key.startsWith('tab-')) return 'tabs'
+  if (key.startsWith('model-')) return 'models'
+  if (key.startsWith('effort-')) return 'efforts'
+  if (key.startsWith('default-mode-')) return 'default-modes'
+  if (key.startsWith('zen-theme-')) return 'zen-themes'
+  if (key === 'zen-on' || key === 'zen-off') return 'zen-onoff'
+  if (key === 'status-on' || key === 'status-off') return 'status-onoff'
+  if (key.startsWith('lang-')) return 'languages'
+  if (key === 'themes-reset' || key === 'themes-refresh') return 'theme-actions'
+  return key
+}
+
+// Up and down walk the rows, keeping the column: the element above or below, not
+// the next one in Tab order.
+function neighbour(order: readonly string[], from: string | null, by: number) {
+  const rows: string[][] = []
+  for (const key of order) {
+    const last = rows[rows.length - 1]
+    if (last !== undefined && rowOf(last[0]!) === rowOf(key)) last.push(key)
+    else rows.push([key])
+  }
+  const at = from === null ? -1 : rows.findIndex(r => r.includes(from))
+  if (at === -1) return (by > 0 ? rows[0] : rows[rows.length - 1])?.[0]
+  const column = rows[at]!.indexOf(from!)
+  const row = rows[Math.max(0, Math.min(rows.length - 1, at + Math.sign(by)))]!
+  return row[Math.min(column, row.length - 1)]
 }
 
 // Moves the menu to another tab.
@@ -705,13 +725,29 @@ async function goTo($: EngineInterface, panel: Panel) {
   }
 }
 
+async function closeMenu($: EngineInterface) {
+  paneWasFocused = false
+  // A plugin's own close skips its own ui.close hook, so reset here too.
+  await $.ui.close({ id: PANE }).catch(() => {})
+  await update($, menu, () => null)
+  focusedKey = null
+}
+
+// Gives the open menu the keyboard back and puts the focus ring on the current
+// tab, so the arrows work again after a second /tools.
+async function refocusPane($: EngineInterface, panel: Panel) {
+  focusedKey = null
+  const opened = await $.ui.open({ id: PANE, title: MENU_NAME, focus: true, closeOnEscape: true, holdToasts: true, ...PANE_SIZE })
+  if (!opened.isPlaced) return
+  const key = `tab-${panel === 'main' ? 'zen' : panel}`
+  const moved = await $.ui.focus({ requestId: PANE, key }).catch(() => ({ deny: 'focus unavailable' }))
+  if (moved.deny === undefined) focusedKey = key
+}
+
 // Opens the menu in its pane with the keyboard, or closes it.
 async function toggleMenu($: EngineInterface, panel: Panel = 'zen') {
   if ((await read($, menu)) !== null) {
-    // A plugin's own close skips its own ui.close hook, so reset here too.
-    await $.ui.close({ id: PANE })
-    await update($, menu, () => null)
-    focusedKey = null
+    await closeMenu($)
     return
   }
   await update($, menu, () => panel)
@@ -726,10 +762,10 @@ async function toggleMenu($: EngineInterface, panel: Panel = 'zen') {
 
 // The theme list scrolls on its own, inside a pane exactly the body's height,
 // so the tabs above it and the language row under it stay where they are.
-// Rows the themes page takes besides the list: the title and tab strip (7, spaced), the kept
-// theme, the search, the actions, a status line while there is one, the
-// language footer (7, spaced), and one spare in case a row wraps.
-const listRows = (bodyRows: number, hasStatus: boolean) => Math.max(3, bodyRows - (7 + 3 + (hasStatus ? 1 : 0) + 7 + 1))
+// Rows the themes page takes besides the list: the title and tab strip (2),
+// the kept theme, the search, the actions, a status line while there is one,
+// the language footer (2), and one spare in case a row wraps.
+const listRows = (bodyRows: number, hasStatus: boolean) => Math.max(3, bodyRows - (2 + 3 + (hasStatus ? 1 : 0) + 2 + 1))
 
 async function foundThemes($: EngineInterface) {
   const query = (await read($, themeQuery)).trim().toLowerCase()
@@ -802,6 +838,13 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
     </Box>
   )
   const check = (isOn: boolean) => isOn && <Text color="claude">{' ✓'}</Text>
+  // What is set now, written beside a section's heading.
+  const current = (value: RenderChildren) => (
+    <Text>
+      <Text dimColor>{t('current')}: </Text>
+      <Text bold color="claude">{value}</Text>
+    </Text>
+  )
   // Swatches: one square a color, a space between.
   const swatches = (colors: readonly string[]) => (
     <Text>
@@ -811,7 +854,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
     </Text>
   )
   const heading = (text: string, extra?: RenderChildren) => (
-    <Box key={`h-${text}`} marginTop={2} marginBottom={1} gap={1}>
+    <Box key={`h-${text}`} gap={1}>
       <Text dimColor bold>{`╴ ${text.toUpperCase()}`}</Text>
       {extra}
     </Box>
@@ -830,12 +873,12 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
     const zenThemeNow = await read($, zenTheme)
     const custom = await read($, zenCustom)
     rows.push(
-      heading(t('zenMode')),
+      heading(t('zenMode'), current(isZenOn ? t('on') : t('off'))),
       chips('zen-onoff', [
         chip('zen-on', t('on'), isZenOn, () => setZenOn($, true)),
         chip('zen-off', t('off'), !isZenOn, () => setZenOn($, false)),
       ]),
-      heading(t('bandColor')),
+      heading(t('bandColor'), current(zenThemeNow)),
       <Box key="zen-themes" flexWrap="wrap" columnGap={2}>
         {ZEN_THEMES.map(theme => {
           const isOn = theme === zenThemeNow
@@ -843,7 +886,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
           return (
             <Button key={reg(`zen-theme-${theme}`)} plain label={theme} onPress={() => setZenTheme($, theme)}>
               {swatches(dot)}
-              <Text bold={isOn} dimColor={!isOn}>{theme}</Text>
+              <Text bold={isOn} dimColor={!isOn} underline={isOn} color={isOn ? 'claude' : undefined}>{isOn ? `${theme} ✓` : theme}</Text>
             </Button>
           )
         })}
@@ -957,12 +1000,18 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
       </Text>
     )
     rows.push(
-      heading(t('model')),
+      heading(t('model'), current(MODELS.find(m => m.alias === family)?.label ?? '—')),
       chips('models', [
         ...MODELS.map(m => chip(`model-${m.alias}`, m.label, m.alias === family, switchModel(m.alias))),
         <Button key={reg('model-default')} plain dimColor label={t('modelDefault')} onPress={switchModel('default')} />,
       ]),
-      heading(t('effort'), meter),
+      heading(
+        t('effort'),
+        <Box gap={1}>
+          {current(level ?? '—')}
+          {meter}
+        </Box>,
+      ),
       chips(
         'efforts',
         EFFORTS.map(l => {
@@ -998,7 +1047,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
         {running === null ? t('runningUnknown') : <Text color={MODE_COLORS[running] ?? 'text'}>{modeName(lng, running)}</Text>}
         <Text dimColor> · {t('shiftTab')}</Text>
       </Text>,
-      heading(t('newSessions')),
+      heading(t('newSessions'), current(modeName(lng, next))),
       chips(
         'default-modes',
         MODES.map(m =>
@@ -1012,7 +1061,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
               onPress={() => setDefaultMode($, m).catch((error: unknown) => $.ui.toast(`Could not save the mode: ${String(error)}`))}
             >
               <Text color={MODE_COLORS[m] ?? 'text'} bold={m === next}>
-                {modeName(lng, m)}
+                {m === next ? `✓ ${modeName(lng, m)}` : modeName(lng, m)}
               </Text>
               {m === running && <Text color={MODE_COLORS[m] ?? 'text'}>{` · ${t('now')}`}</Text>}
             </Button>,
@@ -1032,7 +1081,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
   if (tab === 'status') {
     const isOn = await read($, statusOn)
     rows.push(
-      heading(t('statusLine')),
+      heading(t('statusLine'), current(isOn ? t('on') : t('off'))),
       chips('status-onoff', [
         chip('status-on', t('on'), isOn, () =>
           setStatusOn($, true).catch((error: unknown) => $.ui.toast(`Could not turn it on: ${String(error)}`)),
@@ -1051,12 +1100,9 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
 
   // Tabs: plain words, the chosen one in the accent color and underlined.
   const tabStrip = (
-    <Box key="tabs" flexDirection="column" marginTop={1}>
-      <Box justifyContent="space-between" marginBottom={1}>
-        <Text bold color="claude">{'✦ claude-cli-mod'}</Text>
-        <Button key="tools-close" plain dimColor label={` ${t('close')} `} onPress={() => toggleMenu($)} />
-      </Box>
-      <Box columnGap={2} marginBottom={1}>
+    <Box key="tabs" flexDirection="column">
+      <Box columnGap={1}>
+        <Text bold color="claude">{'✦'}</Text>
         {TABS.map(({ panel: p, name }) => {
           const isOn = p === tab
           return (
@@ -1077,17 +1123,17 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
   )
 
   const footer = (
-    <Box key="footer" flexDirection="column" marginTop={2} flexShrink={0}>
+    <Box key="footer" flexDirection="column" flexShrink={0}>
       {rule}
       <Box columnGap={1} flexWrap="wrap" alignItems="center">
         <Text dimColor>{t('language')}</Text>
         {LANGS.map(l => chip(`lang-${l.lang}`, l.label, l.lang === lng, () => setLang($, l.lang)))}
       </Box>
-      <Text dimColor>{t('keys')}</Text>
     </Box>
   )
 
-  paneOrder = [...TABS.map(x => `tab-${x.panel}`), 'tools-close', ...rowKeys, ...order.splice(0)]
+  // Top to bottom as drawn: the close mark, the tabs, the page, the language row.
+  paneOrder = [...TABS.map(x => `tab-${x.panel}`), ...rowKeys, ...order.splice(0)]
 
   // The themes page is exactly the body's height, its list scrolling inside;
   // the other pages grow, the footer at the bottom while they fit.
@@ -1097,14 +1143,18 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
       flexDirection="column"
       paddingX={1}
       width={e.props.bodyColumns}
-      height={isThemes ? e.props.scroll.bodyRows : undefined}
-      minHeight={isThemes ? undefined : e.props.scroll.bodyRows}
+      height={isThemes ? e.props.scroll.bodyRows + 1 : undefined}
+      minHeight={isThemes ? undefined : e.props.scroll.bodyRows + 1}
     >
       {tabStrip}
       <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow={isThemes ? 'hidden' : undefined}>
         {rows}
       </Box>
       {footer}
+      {/* One row taller than the window: the engine only turns an arrow key into a
+          scroll (which the ui.scroll hook turns into a focus move) while the page
+          has a row to scroll. The row is empty and never shown, the window stays put. */}
+      <Box key="arrow-spacer" height={1} flexShrink={0} />
     </Box>
   )
 }
@@ -1298,6 +1348,9 @@ let paneRows: number | undefined
 // the arrows (which the engine would scroll the body with) walk this list instead.
 let paneOrder: string[] = []
 let focusedKey: string | null = null
+// True once the person has held the keyboard in the open menu: losing it later
+// (back to the chat) closes the menu.
+let paneWasFocused = false
 
 export const register: Register = on => {
 
@@ -1342,7 +1395,28 @@ export const register: Register = on => {
       argumentHint: '[zen|themes|mode|status|debug]',
       immediate: true,
     })
+    await $.command.register({
+      name: 'zen',
+      description: 'Zen mode: /zen on or /zen off turns it on or off; /zen hide folds the subtasks, /zen show brings them back',
+      argumentHint: '[on|off|hide|show]',
+      immediate: true,
+    })
     return started
+  })
+
+  // on / off turn the mode itself on and off (the ON / OFF chips of the menu); hide / show
+  // only fold the subtasks inside the band. No argument toggles the mode.
+  on('command.run', { command: 'zen' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase()
+    const hide = ['hide', 'ocultar', 'esconder', 'fold'].includes(arg)
+    const show = ['show', 'mostrar', 'unfold'].includes(arg)
+    if (hide || show) {
+      await setZenCollapsed($, hide)
+      return { text: hide ? 'Zen: subtasks hidden (/zen show to bring them back).' : 'Zen: subtasks shown (/zen hide to fold them).' }
+    }
+    const turnOn = ['on', 'ativar', 'ligar'].includes(arg) ? true : ['off', 'desativar', 'desligar'].includes(arg) ? false : !(await read($, zenOn))
+    await setZenOn($, turnOn)
+    return { text: turnOn ? 'Zen: on (/zen off to turn it off).' : 'Zen: off (/zen on to turn it back on).' }
   })
 
   on('command.run', { command: 'tools' }, async ($, e) => {
@@ -1352,14 +1426,19 @@ export const register: Register = on => {
       return { text: rows.map(r => `${r.key} (${r.kind}) = ${JSON.stringify(r.value)}`).join('\n') }
     }
     const panel: Panel = arg === 'themes' || arg === 'mode' || arg === 'status' ? arg : 'zen'
-    if ((await read($, menu)) !== null) await goTo($, panel)
-    else await toggleMenu($, panel)
+    if ((await read($, menu)) !== null) {
+      await goTo($, panel)
+      await refocusPane($, panel)
+    } else await toggleMenu($, panel)
     return { text: 'claude-cli-mod is open.' }
   })
 
   // The menu's pane.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     paneRows = e.props.scroll.bodyRows
+    // The keyboard went back to the chat: close the menu on its own.
+    if (e.props.isFocused) paneWasFocused = true
+    else if (paneWasFocused) void closeMenu($)
     const panel = await read($, menu)
     const drawn = panel === null ? null : await drawPane($, e, panel)
     return drawn ?? $.ui.resolve(e).Text({ children: '' })
@@ -1367,6 +1446,7 @@ export const register: Register = on => {
 
   // However the pane closes (esc, its close mark, the corner button), the menu resets.
   on('ui.close', { id: PANE }, async ($, e, next) => {
+    paneWasFocused = false
     const closed = await next(e)
     await update($, menu, () => null)
     focusedKey = null
@@ -1376,12 +1456,13 @@ export const register: Register = on => {
   // Themes: the wheel and the scroll keys move the theme list's own window,
   // never the pane, so the tabs and the language row stay put.
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
+    void logKey($, `scroll by=${e.by} offset=${e.offset} pointer=${e.pointer === undefined ? 'none' : 'yes'} from=${focusedKey}`)
     // An arrow key reaches here as a one-row scroll with no pointer (a wheel tick
     // has one): walk the focus ring instead, up and down in Tab order.
     if (e.pointer === undefined && e.origin.kind === 'person' && Math.abs(e.by) === 1 && paneOrder.length > 0) {
-      const at = focusedKey === null ? -1 : paneOrder.indexOf(focusedKey)
-      const to = at === -1 ? (e.by > 0 ? 0 : paneOrder.length - 1) : Math.max(0, Math.min(paneOrder.length - 1, at + e.by))
-      const moved = await $.ui.focus({ requestId: PANE, key: paneOrder[to]! })
+      const to = neighbour(paneOrder, focusedKey, e.by)
+      if (to === undefined) return {}
+      const moved = await $.ui.focus({ requestId: PANE, key: to })
       if (moved.deny !== undefined) $.ui.toast(`Could not move: ${moved.deny}`)
       return {}
     }
@@ -1393,6 +1474,7 @@ export const register: Register = on => {
   // Themes: the focus ring stepping onto a theme past either end of the
   // window brings it into view.
   on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    void logKey($, `focus from=${focusedKey} to=${e.element ?? '(engine stop)'} origin=${e.origin.kind}`)
     const moved = await next(e)
     if (moved.deny === undefined) focusedKey = e.element ?? null
     const slug = e.element?.startsWith('theme:') ? e.element.slice('theme:'.length) : null
@@ -1434,7 +1516,17 @@ export const register: Register = on => {
   // instructions for Claude (read with the prompt, never shown).
   let lastPrompt = ''
 
+  // While the menu is open the space bar does nothing: it would type into the chat
+  // and take the keyboard from the menu. Esc, Enter, Tab and the arrows still work.
+  on('prompt.edit', async ($, e, next) => {
+    const isSpace = e.inputText === ' ' || e.key?.key === ' ' || e.key?.key === 'space'
+    if (isSpace && (await read($, menu)) !== null) return { text: e.text, cursor: e.cursor }
+    return next(e)
+  })
+
   on('prompt.submit', async ($, e, next) => {
+    // Back to the chat: sending a prompt closes the menu.
+    if ((await read($, menu)) !== null && !e.text.trim().startsWith('/tools')) await closeMenu($)
     const text = e.text.trim()
     const isTyped = e.origin.kind === 'composer' && text !== '' && !text.startsWith('/')
     if (!isTyped) return next(e)
