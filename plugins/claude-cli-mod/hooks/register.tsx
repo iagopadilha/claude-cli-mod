@@ -86,7 +86,7 @@ const ZEN_TOOL = 'mcp__claude-cli-mod__zen_progress'
 const PANE = 'claude-tools'
 const PANE_SIZE = { rows: 15, columns: 48 }
 // Body rows each page needs, so the pane is no taller than its content.
-const PAGE_ROWS: Record<Panel, number> = { main: 10, zen: 10, mode: 16, themes: 16, status: 8 }
+const PAGE_ROWS: Record<Panel, number> = { main: 10, zen: 10, mode: 16, themes: 15, status: 11 }
 const paneSize = (panel: Panel) => ({ rows: PAGE_ROWS[panel], columns: PANE_SIZE.columns })
 // Used until the terminal's own background is known: just short of pure black.
 const PANE_BACKGROUND = '#0b0b0b'
@@ -157,6 +157,7 @@ async function setZenCollapsed($: EngineInterface, isCollapsed: boolean) {
 async function setZenTheme($: EngineInterface, theme: ZenTheme) {
   await update($, zenTheme, () => theme)
   await $.store.set('zenTheme', theme)
+  await fitPane($)
 }
 
 async function setZenColor($: EngineInterface, part: keyof ZenColors, value: string) {
@@ -726,8 +727,18 @@ async function goTo($: EngineInterface, panel: Panel) {
     await revealKept($)
     void ensureThemes($)
   }
-  // Each page asks for its own height (no focus flag: the keyboard stays put).
-  await $.ui.open({ id: PANE, title: MENU_NAME, closeOnEscape: true, holdToasts: true, ...paneSize(panel) }).catch(() => {})
+  await fitPane($)
+}
+
+// Each page asks for its own height (no focus flag: the keyboard stays put).
+async function fitPane($: EngineInterface) {
+  const panel = await read($, menu)
+  if (panel === null) return
+  const customInputs = panel === 'zen' && (await read($, zenTheme)) === 'custom' ? 3 : 0
+  const size = paneSize(panel)
+  await $.ui
+    .open({ id: PANE, title: MENU_NAME, closeOnEscape: true, holdToasts: true, rows: size.rows + customInputs, columns: size.columns })
+    .catch(() => {})
 }
 
 async function closeMenu($: EngineInterface) {
@@ -766,11 +777,11 @@ async function toggleMenu($: EngineInterface, panel: Panel = 'zen') {
 }
 
 // The theme list scrolls on its own, inside a pane exactly the body's height,
-// so the tabs above it and the language row under it stay where they are.
+// so the tabs above it stay where they are.
 // Rows the themes page takes besides the list: the title and tab strip (2),
 // the kept theme, the search, the actions, a status line while there is one,
-// the language footer (2), and one spare in case a row wraps.
-const listRows = (bodyRows: number, hasStatus: boolean) => Math.max(3, bodyRows - (2 + 3 + (hasStatus ? 1 : 0) + 2 + 1))
+// and one spare in case a row wraps.
+const listRows = (bodyRows: number, hasStatus: boolean) => Math.max(3, bodyRows - (2 + 3 + (hasStatus ? 1 : 0) + 1))
 
 async function foundThemes($: EngineInterface) {
   const query = (await read($, themeQuery)).trim().toLowerCase()
@@ -1098,6 +1109,11 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
       <Text key="status-note" dimColor>
         {t('statusNote')}
       </Text>,
+      heading(t('language')),
+      chips(
+        'languages',
+        LANGS.map(l => chip(`lang-${l.lang}`, l.label, l.lang === lng, () => setLang($, l.lang))),
+      ),
     )
   }
 
@@ -1127,16 +1143,6 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
     </Box>
   )
 
-  const footer = (
-    <Box key="footer" flexDirection="column" marginTop={1} flexShrink={0}>
-      {rule}
-      <Box columnGap={1} flexWrap="wrap" alignItems="center">
-        <Text dimColor>{t('language')}</Text>
-        {LANGS.map(l => chip(`lang-${l.lang}`, l.label, l.lang === lng, () => setLang($, l.lang)))}
-      </Box>
-    </Box>
-  )
-
   // Top to bottom as drawn: the close mark, the tabs, the page, the language row.
   paneOrder = [...TABS.map(x => `tab-${x.panel}`), ...rowKeys, ...order.splice(0)]
 
@@ -1155,7 +1161,6 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
       <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow={isThemes ? 'hidden' : undefined}>
         {rows}
       </Box>
-      {footer}
       {/* One row taller than the window: the engine only turns an arrow key into a
           scroll (which the ui.scroll hook turns into a focus move) while the page
           has a row to scroll. The row is empty and never shown, the window stays put. */}
