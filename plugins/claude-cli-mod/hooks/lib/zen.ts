@@ -20,14 +20,14 @@ export const ZEN_TOOL_NAME = 'zen_progress'
 export const ZEN_PROMPT = [
   'Zen mode is on: the user sees only your text messages, not your tool calls or their output.',
   'They follow your work on a progress band fed by the zen_progress tool (mcp__claude-cli-mod__zen_progress).',
-  'Before you start, call it with your plan as 4 to 5 short steps (never more than 5), each naming the main thing done at that moment.',
+  'Before you start, call it with your plan: 4 to 5 short steps for a normal task (more only for a long plan such as an orchestration or a loop; the band shows the next few and counts the rest), each naming the main thing done at that moment.',
   'Call it again with the whole list every time a step starts or finishes, so exactly one step is in_progress while you work and the bar fills one step at a time;',
   'never skip from the first call to the last, and mark every step completed when you are done.',
   'Before acting, say in a sentence what you are about to do and why.',
 ].join(' ')
 
 export const ZEN_TOOL_DESCRIPTION =
-  'Updates the Zen mode progress band the user watches. Send your whole plan each call: 4 to 5 steps, each with its status ' +
+  'Updates the Zen mode progress band the user watches. Send your whole plan each call: 4 to 5 steps for a normal task (more for a long plan), each with its status ' +
   '(pending, in_progress or completed). Call it when you start a task and every time a step starts or finishes, so the bar fills step by step.'
 
 export const ZEN_TOOL_SCHEMA = {
@@ -36,8 +36,7 @@ export const ZEN_TOOL_SCHEMA = {
     title: { type: 'string', description: 'Optional short name for the whole task.' },
     steps: {
       type: 'array',
-      description: 'The full plan, in order: 4 to 5 steps, never more than 5.',
-      maxItems: 5,
+      description: 'The full plan, in order. 4 to 5 steps for a normal task; a long plan (an orchestration, a loop) may have more.',
       items: {
         type: 'object',
         properties: {

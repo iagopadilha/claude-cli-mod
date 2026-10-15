@@ -675,10 +675,10 @@ async function drawZenBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   const detail = [hasPlan ? stepLabel(t) : '', elapsed((t.doneAt ?? clock) - t.startedAt)]
     .filter(part => part !== '')
     .join(' · ')
-  // Every step still to do is listed; only a long plan is cut, with a count of
+  // The next five steps still to do are listed; a longer plan is cut there, with a count of
   // what is left. Finished steps are in the step label, and a finished task is one line.
   const todo = isDone || isCollapsed ? [] : t.steps.filter(step => step.status !== 'completed')
-  const rest = todo.length > 6 ? todo.slice(0, 5) : todo
+  const rest = todo.slice(0, 5)
   const hidden = todo.length - rest.length
   return (
     <Box flexDirection="column" paddingX={1}>
