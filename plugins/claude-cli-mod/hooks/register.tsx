@@ -652,19 +652,26 @@ async function drawZenBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
       <Text dimColor>{'▱'.repeat(10 - filled)}</Text>
     </Text>
   )
+  // No title yet means Claude has not named the task: say it is thinking. A long
+  // title is cut, so the band stays one short line.
+  const name = t.title === '' ? phrase(lng, 'thinking') : t.title.length > 48 ? `${t.title.slice(0, 47)}…` : t.title
+  const hasPlan = t.steps.length > 0 || isDone
   const title =
     theme === 'rainbow' ? (
       <Text bold wrap="truncate">
         {mark}{' '}
-        {rainbow(t.title).map(({ ch, color }) => (
+        {rainbow(name).map(({ ch, color }) => (
           <Text color={color}>{ch}</Text>
         ))}
       </Text>
     ) : (
       <Text color={accent} bold wrap="truncate">
-        {mark} {t.title}
+        {mark} {name}
       </Text>
     )
+  const detail = [hasPlan ? stepLabel(t) : '', elapsed((t.doneAt ?? clock) - t.startedAt)]
+    .filter(part => part !== '')
+    .join(' · ')
   // Every step still to do is listed; only a long plan is cut, with a count of
   // what is left. Finished steps are in the step label, and a finished task is one line.
   const todo = isDone || isCollapsed ? [] : t.steps.filter(step => step.status !== 'completed')
@@ -674,9 +681,15 @@ async function drawZenBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
     <Box flexDirection="column" paddingX={1}>
       <Box gap={1}>
         <Box flexShrink={1}>{title}</Box>
-        {meter}
-        <Text color={accent} bold>{`${percent}%`}</Text>
-        <Text dimColor>{`${stepLabel(t)} · ${elapsed((t.doneAt ?? clock) - t.startedAt)}`}</Text>
+        {hasPlan && <Box flexShrink={0}>{meter}</Box>}
+        {hasPlan && (
+          <Box flexShrink={0}>
+            <Text color={accent} bold>{`${percent}%`}</Text>
+          </Box>
+        )}
+        <Box flexShrink={0}>
+          <Text dimColor>{detail}</Text>
+        </Box>
       </Box>
       {rest.map(step => {
         const isNow = step.status === 'in_progress'
@@ -1337,7 +1350,7 @@ function stopTicker() {
 // Puts a fresh task on the band and starts its clock.
 async function startTask($: EngineInterface, title: string) {
   const startedAt = await $.clock.now()
-  const fresh: ZenTask = { title: title || 'Working', startedAt, doneAt: null, steps: [] }
+  const fresh: ZenTask = { title, startedAt, doneAt: null, steps: [] }
   await update($, task, () => fresh)
   await update($, now, () => startedAt)
   stopTicker()
@@ -1536,7 +1549,6 @@ export const register: Register = on => {
   // Zen: asks Claude to narrate and keep a task list the band can follow.
   // Zen: each prompt typed starts a new task on the band, and carries the Zen
   // instructions for Claude (read with the prompt, never shown).
-  let lastPrompt = ''
 
   // While the menu is open and the chat box is empty the space bar does nothing: it
   // would type into the chat. Typing a letter closes the menu and goes to the chat.
@@ -1556,9 +1568,9 @@ export const register: Register = on => {
     const text = e.text.trim()
     const isTyped = e.origin.kind === 'composer' && text !== '' && !text.startsWith('/')
     if (!isTyped) return next(e)
-    lastPrompt = (text.split('\n')[0] ?? '').slice(0, 200)
     if (!(await read($, zenOn))) return next(e)
-    await startTask($, lastPrompt)
+    // The title stays empty (the band says "thinking") until Claude names the task.
+    await startTask($, '')
     return next({ ...e, context: [...(e.context ?? []), ZEN_PROMPT] })
   }).catch(($, e, next) => next(e))
 
@@ -1569,7 +1581,7 @@ export const register: Register = on => {
       const step = raw as { text?: unknown; status?: unknown }
       return typeof step.text === 'string' ? [{ id: `zen-${i}`, text: step.text, status: asStatus(step.status) }] : []
     })
-    if ((await read($, task)) === null) await startTask($, lastPrompt)
+    if ((await read($, task)) === null) await startTask($, '')
     await update($, task, t =>
       t === null ? t : { ...t, title: typeof input.title === 'string' && input.title !== '' ? input.title : t.title, steps },
     )
