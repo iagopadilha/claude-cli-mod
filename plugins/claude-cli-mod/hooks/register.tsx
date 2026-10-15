@@ -85,9 +85,9 @@ const ZEN_TOOL = 'mcp__claude-cli-mod__zen_progress'
 const PANE = 'claude-tools'
 const PANE_SIZE = { rows: 15, columns: 48 }
 // The menu's content is no wider than this, left-aligned in the pane's frame.
-const CONTENT_COLUMNS = 64
+const CONTENT_COLUMNS = 56
 // Body rows each page needs, so the pane is no taller than its content.
-const PAGE_ROWS: Record<Panel, number> = { main: 10, zen: 10, mode: 16, themes: 15, status: 11 }
+const PAGE_ROWS: Record<Panel, number> = { main: 8, zen: 8, mode: 14, themes: 15, status: 10 }
 const paneSize = (panel: Panel) => ({ rows: PAGE_ROWS[panel], columns: PANE_SIZE.columns })
 // Used until the terminal's own background is known: just short of pure black.
 const PANE_BACKGROUND = '#0b0b0b'
@@ -502,6 +502,7 @@ async function setDefaultMode($: EngineInterface, next: Mode) {
   await $.fs.write(path, `${JSON.stringify(settings, null, 2)}\n`)
   await update($, defaultMode, () => next)
   await update($, defaultModeChosen, () => true)
+  await fitPane($)
   $.ui.toast(`New sessions start in ${modeLabel(next)} mode`)
 }
 
@@ -761,10 +762,13 @@ async function goTo($: EngineInterface, panel: Panel) {
 async function fitPane($: EngineInterface) {
   const panel = await read($, menu)
   if (panel === null) return
+  // Rows a page gains: the custom color inputs, the bypass-permissions warning.
   const customInputs = panel === 'zen' && (await read($, zenTheme)) === 'custom' ? 3 : 0
+  const chosen = (await read($, defaultModeChosen)) ? await read($, defaultMode) : ((await read($, mode)) ?? (await read($, defaultMode)))
+  const warning = panel === 'mode' && chosen === 'bypassPermissions' ? 1 : 0
   const size = paneSize(panel)
   await $.ui
-    .open({ id: PANE, title: MENU_NAME, closeOnEscape: true, holdToasts: true, rows: size.rows + customInputs, columns: size.columns })
+    .open({ id: PANE, title: MENU_NAME, closeOnEscape: true, holdToasts: true, rows: size.rows + customInputs + warning, columns: size.columns })
     .catch(() => {})
 }
 
