@@ -85,7 +85,7 @@ const ZEN_TOOL = 'mcp__claude-cli-mod__zen_progress'
 const PANE = 'claude-tools'
 const PANE_SIZE = { rows: 15, columns: 48 }
 // The menu's content is no wider than this, left-aligned in the pane's frame.
-const CONTENT_COLUMNS = 56
+const CONTENT_COLUMNS = 58
 // Body rows each page needs, so the pane is no taller than its content.
 const PAGE_ROWS: Record<Panel, number> = { main: 8, zen: 8, mode: 14, themes: 15, status: 10 }
 const paneSize = (panel: Panel) => ({ rows: PAGE_ROWS[panel], columns: PANE_SIZE.columns })
@@ -926,7 +926,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
         chip('zen-off', t('off'), !isZenOn, () => setZenOn($, false)),
       ]),
       heading(t('bandColor'), current(zenThemeNow)),
-      <Box key="zen-themes" flexWrap="wrap" columnGap={2}>
+      <Box key="zen-themes" flexWrap="wrap" columnGap={1}>
         {ZEN_THEMES.map(theme => {
           const isOn = theme === zenThemeNow
           const dot = theme === 'rainbow' ? RAINBOW.slice(0, 3) : [colorsFor(theme, custom).bar]
@@ -1502,6 +1502,8 @@ export const register: Register = on => {
   // never the pane, so the tabs and the language row stay put.
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
     void logKey($, `scroll by=${e.by} offset=${e.offset} pointer=${e.pointer === undefined ? 'none' : 'yes'} from=${focusedKey}`)
+    // The menu's own reveal of the focused element (see ui.focus): let it move the window.
+    if (e.origin.kind === 'plugin') return next(e)
     // An arrow key reaches here as a one-row scroll with no pointer (a wheel tick
     // has one): walk the focus ring instead, up and down in Tab order.
     if (e.pointer === undefined && e.origin.kind === 'person' && Math.abs(e.by) === 1 && paneOrder.length > 0) {
@@ -1522,6 +1524,11 @@ export const register: Register = on => {
     void logKey($, `focus from=${focusedKey} to=${e.element ?? '(engine stop)'} origin=${e.origin.kind}`)
     const moved = await next(e)
     if (moved.deny === undefined) focusedKey = e.element ?? null
+    // The window follows the focus ring, so an element below the fold is shown
+    // when the arrows or Tab reach it.
+    if (moved.deny === undefined && e.element !== undefined) {
+      await $.ui.scroll({ in: PANE, to: { key: e.element } }).catch(() => {})
+    }
     const slug = e.element?.startsWith('theme:') ? e.element.slice('theme:'.length) : null
     if (slug === null || (await read($, menu)) !== 'themes') return moved
     const at = (await foundThemes($)).findIndex(th => th.slug === slug)
