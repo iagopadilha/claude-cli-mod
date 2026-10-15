@@ -85,6 +85,9 @@ const ZEN_TOOL = 'mcp__claude-cli-mod__zen_progress'
 
 const PANE = 'claude-tools'
 const PANE_SIZE = { rows: 15, columns: 48 }
+// Body rows each page needs, so the pane is no taller than its content.
+const PAGE_ROWS: Record<Panel, number> = { main: 10, zen: 10, mode: 16, themes: 16, status: 8 }
+const paneSize = (panel: Panel) => ({ rows: PAGE_ROWS[panel], columns: PANE_SIZE.columns })
 // Used until the terminal's own background is known: just short of pure black.
 const PANE_BACKGROUND = '#0b0b0b'
 const MENU_NAME = 'claude-cli-mod'
@@ -723,6 +726,8 @@ async function goTo($: EngineInterface, panel: Panel) {
     await revealKept($)
     void ensureThemes($)
   }
+  // Each page asks for its own height (no focus flag: the keyboard stays put).
+  await $.ui.open({ id: PANE, title: MENU_NAME, closeOnEscape: true, holdToasts: true, ...paneSize(panel) }).catch(() => {})
 }
 
 async function closeMenu($: EngineInterface) {
@@ -737,7 +742,7 @@ async function closeMenu($: EngineInterface) {
 // tab, so the arrows work again after a second /tools.
 async function refocusPane($: EngineInterface, panel: Panel) {
   focusedKey = null
-  const opened = await $.ui.open({ id: PANE, title: MENU_NAME, focus: true, closeOnEscape: true, holdToasts: true, ...PANE_SIZE })
+  const opened = await $.ui.open({ id: PANE, title: MENU_NAME, focus: true, closeOnEscape: true, holdToasts: true, ...paneSize(panel) })
   if (!opened.isPlaced) return
   const key = `tab-${panel === 'main' ? 'zen' : panel}`
   const moved = await $.ui.focus({ requestId: PANE, key }).catch(() => ({ deny: 'focus unavailable' }))
@@ -757,7 +762,7 @@ async function toggleMenu($: EngineInterface, panel: Panel = 'zen') {
   }
   // focus + closeOnEscape + holdToasts make the pane behave as a dialog: it takes
   // the keys, Tab and the arrows walk its buttons, Esc closes it.
-  await $.ui.open({ id: PANE, title: MENU_NAME, focus: true, closeOnEscape: true, holdToasts: true, ...PANE_SIZE })
+  await $.ui.open({ id: PANE, title: MENU_NAME, focus: true, closeOnEscape: true, holdToasts: true, ...paneSize(panel) })
 }
 
 // The theme list scrolls on its own, inside a pane exactly the body's height,
@@ -854,7 +859,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
     </Text>
   )
   const heading = (text: string, extra?: RenderChildren) => (
-    <Box key={`h-${text}`} gap={1}>
+    <Box key={`h-${text}`} marginTop={1} gap={1}>
       <Text dimColor bold>{`╴ ${text.toUpperCase()}`}</Text>
       {extra}
     </Box>
@@ -1123,7 +1128,7 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
   )
 
   const footer = (
-    <Box key="footer" flexDirection="column" flexShrink={0}>
+    <Box key="footer" flexDirection="column" marginTop={1} flexShrink={0}>
       {rule}
       <Box columnGap={1} flexWrap="wrap" alignItems="center">
         <Text dimColor>{t('language')}</Text>
@@ -1516,11 +1521,15 @@ export const register: Register = on => {
   // instructions for Claude (read with the prompt, never shown).
   let lastPrompt = ''
 
-  // While the menu is open the space bar does nothing: it would type into the chat
-  // and take the keyboard from the menu. Esc, Enter, Tab and the arrows still work.
+  // While the menu is open and the chat box is empty the space bar does nothing: it
+  // would type into the chat. Typing a letter closes the menu and goes to the chat.
   on('prompt.edit', async ($, e, next) => {
+    if ((await read($, menu)) === null) return next(e)
     const isSpace = e.inputText === ' ' || e.key?.key === ' ' || e.key?.key === 'space'
-    if (isSpace && (await read($, menu)) !== null) return { text: e.text, cursor: e.cursor }
+    // A space with an empty chat box is the menu's own key: it does nothing.
+    if (isSpace && e.text === '') return { text: e.text, cursor: e.cursor }
+    // Typing anything else is going back to the chat: the menu closes, the text goes in.
+    if (e.inputText !== '') await closeMenu($)
     return next(e)
   })
 
