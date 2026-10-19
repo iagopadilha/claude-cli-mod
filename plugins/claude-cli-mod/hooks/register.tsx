@@ -93,7 +93,7 @@ const paneSize = (panel: Panel) => ({ rows: PAGE_ROWS[panel], columns: PANE_SIZE
 const PANE_BACKGROUND = '#0b0b0b'
 const MENU_NAME = 'claude-cli-mod'
 // Room the engine's own mode label takes left of the hint row (⏵⏵ auto mode on · ).
-const MODE_LABEL_COLUMNS = 22
+const MODE_LABEL_COLUMNS = 48
 // The slug of the Claude Code theme the mod writes: ~/.claude/themes/claude-cli-mod.json.
 const CLAUDE_THEME = 'claude-cli-mod'
 
@@ -1210,12 +1210,35 @@ function hintText(hint: string) {
     .join(' · ')
 }
 
+// A draw that throws makes the engine draw its own line, without the button: the
+// button row is the fallback, so the menu button is always there.
 async function drawPromptHint($: EngineInterface, e: RenderInput<'PromptHint'>) {
+  try {
+    return await drawPromptHintRow($, e)
+  } catch {
+    const { Box, Button } = $.ui.resolve(e)
+    return (
+      <Box justifyContent="flex-end" flexGrow={1}>
+        <Box flexShrink={0}>
+          <Button key="tools-toggle" plain label=" menu (/tools) " onPress={() => toggleMenu($)} />
+        </Box>
+      </Box>
+    )
+  }
+}
+
+async function drawPromptHintRow($: EngineInterface, e: RenderInput<'PromptHint'>) {
   const { Box, Text, Button } = $.ui.resolve(e)
   const isOpen = (await read($, menu)) !== null
   const shownEffort = (await read($, effort)) ?? (await read($, sessionEffort))
   const label = ' menu (/tools) '
-  const button = <Button key="tools-toggle" plain label={label} onPress={() => toggleMenu($)} />
+  // flexShrink 0: when the row is tight (a wider mode label, a long branch name) the text
+  // gives way and the button keeps its whole label. A shrinkable button vanished.
+  const button = (
+    <Box key="tools-toggle-box" flexShrink={0}>
+      <Button key="tools-toggle" plain label={label} onPress={() => toggleMenu($)} />
+    </Box>
+  )
   const snapshot = (await read($, statusOn)) ? await read($, status) : null
 
   // The engine keeps its mode label (⏵⏵ auto mode on ·) in a column of its own
@@ -1224,9 +1247,11 @@ async function drawPromptHint($: EngineInterface, e: RenderInput<'PromptHint'>) 
   if (snapshot === null) {
     return (
       <Box justifyContent="space-between" flexGrow={1} gap={1}>
-        <Text dimColor wrap="truncate">
-          {hintText(e.props.hint)}
-        </Text>
+        <Box flexShrink={1} flexGrow={1}>
+          <Text dimColor wrap="truncate">
+            {hintText(e.props.hint)}
+          </Text>
+        </Box>
         {button}
       </Box>
     )
@@ -1299,8 +1324,12 @@ async function drawPromptHint($: EngineInterface, e: RenderInput<'PromptHint'>) 
 
   const statsRow = (
     <Box justifyContent="space-between" flexGrow={1} gap={1}>
-      <Text wrap="truncate">{stats}</Text>
-      <Text dimColor>│</Text>
+      <Box flexShrink={1} flexGrow={1}>
+        <Text wrap="truncate">{stats}</Text>
+      </Box>
+      <Box flexShrink={0}>
+        <Text dimColor>│</Text>
+      </Box>
       {button}
     </Box>
   )
