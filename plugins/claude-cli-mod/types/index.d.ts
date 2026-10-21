@@ -1,4 +1,4 @@
-export type Panel = 'main' | 'zen' | 'themes' | 'mode' | 'status'
+export type Panel = 'main' | 'zen' | 'themes' | 'mode' | 'status' | 'accounts'
 
 export type ZenTheme = 'blue' | 'dark' | 'light' | 'green' | 'rainbow' | 'custom'
 
@@ -35,6 +35,23 @@ export type StatusSnapshot = {
   limits: RateLimit[]
 }
 
+// How this session is signed in: a claude-contas token (`cc` hands it over as
+// CLAUDE_CODE_OAUTH_TOKEN), the person's own /login, or an API key.
+export type AccountKind = 'token' | 'login' | 'api-key' | 'none'
+
+// name: the claude-contas account it is, when one matches; email and org: the
+// /login record's (never read under a token, whose account the record is not).
+export type CurrentAccount = { kind: AccountKind; name: string | null; email: string | null; org: string | null }
+
+export type AccountWindow = { key: string; percent: number; resetsAt: number | null }
+
+export type AccountState = 'available' | 'warning' | 'limit' | 'error'
+
+// isLive: the windows are this session's own reading, not the last probe.
+export type AccountRow = { name: string; error: string | null; state: AccountState; windows: AccountWindow[]; isLive: boolean }
+
+export type AccountsSnapshot = { updatedAt: number; best: string | null; rows: AccountRow[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'claude-cli-mod': {
@@ -63,6 +80,10 @@ declare module 'claude-code' {
       paneBg: string | null
       defaultModeChosen: boolean
       lang: Lang
+      account: CurrentAccount | null
+      accounts: AccountsSnapshot | null
+      accountsNote: string
+      isRefreshingAccounts: boolean
     }
   }
 }

@@ -1,7 +1,21 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, RenderInput, Timer } from 'claude-code'
 
-import type { Effort, Lang, Panel, RateLimit, StatusSnapshot, ThemeEntry, ZenColors, ZenStep, ZenTask, ZenTheme } from '../types'
+import type {
+  AccountState,
+  CurrentAccount,
+  Effort,
+  Lang,
+  Panel,
+  RateLimit,
+  StatusSnapshot,
+  ThemeEntry,
+  ZenColors,
+  ZenStep,
+  ZenTask,
+  ZenTheme,
+} from '../types'
+import { ACCOUNT_WINDOWS, accountForEmail, accountTag, freest, parseEntries, parseSnapshot, withLive } from './lib/accounts'
 import { EFFORT_HEAT, EFFORTS, type Mode, MODELS, MODES, modeLabel, modelFamily } from './lib/modes'
 import { isLang, LANGS, modeName, phrase, type Phrase } from './lib/i18n'
 import {
@@ -17,6 +31,7 @@ import {
   STATUS_CYAN,
   STATUS_GREEN,
   STATUS_RED,
+  STATUS_YELLOW,
   statsWidth,
 } from './lib/status'
 import {
@@ -77,6 +92,10 @@ const status = atom({ plugin: 'claude-cli-mod', key: 'status' } as const, null)
 const lastResponseAt = atom({ plugin: 'claude-cli-mod', key: 'lastResponseAt' } as const, null)
 const lang = atom({ plugin: 'claude-cli-mod', key: 'lang' } as const, 'en')
 const statusClock = atom({ plugin: 'claude-cli-mod', key: 'statusClock' } as const, 0)
+const account = atom({ plugin: 'claude-cli-mod', key: 'account' } as const, null)
+const accounts = atom({ plugin: 'claude-cli-mod', key: 'accounts' } as const, null)
+const accountsNote = atom({ plugin: 'claude-cli-mod', key: 'accountsNote' } as const, '')
+const isRefreshingAccounts = atom({ plugin: 'claude-cli-mod', key: 'isRefreshingAccounts' } as const, false)
 
 // The menu's pane: a sidebar in the fullscreen layout, a block above the prompt otherwise.
 // Claude's progress tool, as the model calls it.
@@ -87,7 +106,7 @@ const PANE_SIZE = { rows: 15, columns: 48 }
 // The menu's content is no wider than this, left-aligned in the pane's frame.
 const CONTENT_COLUMNS = 58
 // Body rows each page needs, so the pane is no taller than its content.
-const PAGE_ROWS: Record<Panel, number> = { main: 8, zen: 8, mode: 14, themes: 15, status: 10 }
+const PAGE_ROWS: Record<Panel, number> = { main: 8, zen: 8, mode: 14, themes: 15, status: 10, accounts: 19 }
 const paneSize = (panel: Panel) => ({ rows: PAGE_ROWS[panel], columns: PANE_SIZE.columns })
 // Used until the terminal's own background is known: just short of pure black.
 const PANE_BACKGROUND = '#0b0b0b'
@@ -627,6 +646,118 @@ async function loadStatus($: EngineInterface) {
   } catch {}
 }
 
+// Accounts ---------------------------------------------------------------------
+
+// claude-contas: where cc says it is (CLAUDE_CONTAS_DIR), else Documents/claude-contas.
+async function contasDir($: EngineInterface) {
+  const dir = (await $.env.get('CLAUDE_CONTAS_DIR')) ?? `${await homeDir($)}/Documents/claude-contas`
+  return dir.replaceAll('\\', '/').replace(/\/+$/, '')
+}
+
+// A contas.json path: relative to claude-contas, `~` the home folder.
+async function entryPath($: EngineInterface, dir: string, file: string) {
+  const path = file.replaceAll('\\', '/').replace(/^~(?=\/)/, await homeDir($))
+  return /^([a-z]:)?\//i.test(path) ? path : `${dir}/${path}`
+}
+
+type LoginRecord = { oauthAccount?: { emailAddress?: string; organizationName?: string } }
+
+// Which account this session runs on. A token (cc hands one over) wins over the
+// /login record in ~/.claude.json, which then still names the person's own account.
+async function detectAccount($: EngineInterface) {
+  const dir = await contasDir($)
+  const contas = `${dir}/contas.json`
+  const entries = (await $.fs.exists(contas)) ? parseEntries(await $.fs.read(contas)) : []
+  const token = (await $.env.get('CLAUDE_CODE_OAUTH_TOKEN'))?.replace(/\s+/g, '')
+  let found: CurrentAccount
+  if (token) {
+    let name = (await $.env.get('CLAUDE_CONTA')) ?? null
+    // Started without cc: the token file holding the same token names it. Compared, never kept.
+    for (const entry of name === null ? entries : []) {
+      const path = await entryPath($, dir, entry.file)
+      if ((await $.fs.exists(path)) && (await $.fs.read(path)).replace(/\s+/g, '') === token) {
+        name = entry.name
+        break
+      }
+    }
+    found = { kind: 'token', name, email: entries.find(x => x.name === name)?.email ?? null, org: null }
+  } else if (await $.env.get('ANTHROPIC_API_KEY')) {
+    found = { kind: 'api-key', name: null, email: null, org: null }
+  } else {
+    let login: LoginRecord['oauthAccount']
+    try {
+      login = (JSON.parse(await $.fs.read(`${await homeDir($)}/.claude.json`)) as LoginRecord).oauthAccount
+    } catch {}
+    const email = login?.emailAddress ?? null
+    found =
+      email === null
+        ? { kind: 'none', name: null, email: null, org: null }
+        : { kind: 'login', name: accountForEmail(entries, email), email, org: login?.organizationName ?? null }
+  }
+  await update($, account, () => found)
+}
+
+// Every account's limits, from claude-contas' status.mjs (its cache answers for two
+// minutes; `force` asks each account again).
+async function refreshAccounts($: EngineInterface, force = false) {
+  if (await read($, isRefreshingAccounts)) return
+  const dir = await contasDir($)
+  const lng = await read($, lang)
+  if (!(await $.fs.exists(`${dir}/status.mjs`))) {
+    await update($, accountsNote, () => phrase(lng, 'accountsMissing', { dir }))
+    return
+  }
+  await update($, isRefreshingAccounts, () => true)
+  try {
+    const ran = await $.process.run(['node', `${dir}/status.mjs`, '--json', ...(force ? ['--forcar'] : [])], { cwd: dir, timeoutMs: 60_000 })
+    if (ran.exitCode !== 0) throw new Error(ran.stderr.trim().split('\n').pop() || `exit ${ran.exitCode}`)
+    const snapshot = parseSnapshot(ran.stdout)
+    await update($, accounts, () => snapshot)
+    await update($, accountsNote, () => '')
+  } catch (error) {
+    await update($, accountsNote, () => phrase(lng, 'accountsFailed', { e: error instanceof Error ? error.message : String(error) }))
+  } finally {
+    await update($, isRefreshingAccounts, () => false)
+  }
+}
+
+// The accounts with this session's own reading in its row.
+async function liveAccounts($: EngineInterface) {
+  const all = await read($, accounts)
+  if (all === null) return null
+  return withLive(all, (await read($, account))?.name ?? null, (await read($, status))?.limits ?? [])
+}
+
+// The 5h window already warned about, by its reset: one toast a window.
+let warnedReset: number | null | undefined
+
+// Past 90% of the 5h window, a toast names the freest other account.
+async function warnNearLimit($: EngineInterface) {
+  const me = await read($, account)
+  const five = (await read($, status))?.limits.find(l => l.label === '5h')
+  if (me === null || five === undefined || five.percent < 90 || warnedReset === five.resetsAt) return
+  const all = await liveAccounts($)
+  const free = all === null ? null : freest(all, me.name)
+  if (free === null) return
+  warnedReset = five.resetsAt
+  const fp = free.windows.find(w => w.key === '5h')?.percent ?? 0
+  $.ui.toast(phrase(await read($, lang), 'limitWarning', { name: me.name ?? accountTag(me), p: five.percent, free: free.name, fp }))
+}
+
+const ACCOUNT_KIND_COLORS: Record<CurrentAccount['kind'], string> = {
+  token: '#f59e0b',
+  login: STATUS_CYAN,
+  'api-key': '#a78bfa',
+  none: STATUS_RED,
+}
+
+const ACCOUNT_STATE_COLORS: Record<AccountState, string> = {
+  available: STATUS_GREEN,
+  warning: STATUS_YELLOW,
+  limit: STATUS_RED,
+  error: STATUS_RED,
+}
+
 // Drawing ----------------------------------------------------------------------
 
 // Zen's progress band; null when there is nothing to show.
@@ -836,6 +967,7 @@ const TABS: readonly { panel: Exclude<Panel, 'main'>; name: Phrase }[] = [
   { panel: 'mode', name: 'tabMode' },
   { panel: 'themes', name: 'tabThemes' },
   { panel: 'status', name: 'tabStatus' },
+  { panel: 'accounts', name: 'tabAccounts' },
 ]
 
 // Text in the rainbow, one color a letter.
@@ -1144,6 +1276,104 @@ async function drawPane($: EngineInterface, e: RenderInput<'Pane'>, panel: Panel
     )
   }
 
+  if (tab === 'accounts') {
+    const me = await read($, account)
+    const shown = await liveAccounts($)
+    const note = await read($, accountsNote)
+    const busy = await read($, isRefreshingAccounts)
+    const clock = await read($, statusClock)
+    const kind =
+      me === null
+        ? '—'
+        : me.kind === 'token'
+          ? t('tokenAccount')
+          : me.kind === 'login'
+            ? t('personalLogin')
+            : me.kind === 'api-key'
+              ? t('apiKeyAuth')
+              : t('noAuth')
+    const who = me?.kind === 'token' ? (me.name ?? '?') : me?.kind === 'login' ? (me.email ?? '?') : ''
+    const about =
+      me?.kind === 'token'
+        ? me.name === null
+          ? t('tokenUnknown')
+          : t('viaCc')
+        : me?.kind === 'login'
+          ? [me.org, me.name === null ? t('notInList') : t('sameAs', { name: me.name })].filter(Boolean).join(' · ')
+          : ''
+    const free = shown === null ? null : freest(shown, me?.name ?? null)
+    const nameWidth = Math.max(4, ...(shown?.rows ?? []).map(r => r.name.length))
+    const updated =
+      shown === null ? '' : new Date(shown.updatedAt).toLocaleTimeString(lng === 'pt' ? 'pt-BR' : 'en-US', { hour: '2-digit', minute: '2-digit' })
+    rows.push(
+      heading(t('thisSession')),
+      <Text key="acct-me" wrap="truncate">
+        <Text bold color={me === null ? undefined : ACCOUNT_KIND_COLORS[me.kind]}>{kind}</Text>
+        {who !== '' && <Text bold>{` · ${who}`}</Text>}
+      </Text>,
+    )
+    if (about !== '') {
+      rows.push(
+        <Text key="acct-me-about" dimColor wrap="truncate">
+          {about}
+        </Text>,
+      )
+    }
+    rows.push(heading(t('accountsTitle'), <Text dimColor>{busy ? t('refreshing') : updated === '' ? '' : t('updatedAt', { t: updated })}</Text>))
+    for (const row of shown?.rows ?? []) {
+      const isMe = row.name === me?.name
+      rows.push(
+        <Text key={`acct-${row.name}`} wrap="truncate">
+          <Text bold={isMe} color={isMe ? 'claude' : undefined}>{`${isMe ? '›' : ' '} ${row.name.padEnd(nameWidth)}`}</Text>
+          <Text color={ACCOUNT_STATE_COLORS[row.state]}>{' ●'}</Text>
+          {row.error !== null ? (
+            <Text dimColor>{` ${row.error}`}</Text>
+          ) : (
+            ACCOUNT_WINDOWS.map(key => {
+              const w = row.windows.find(x => x.key === key)
+              if (w === undefined) return null
+              const reset = w.resetsAt === null ? '' : fmtDuration(w.resetsAt - clock)
+              return (
+                <Text key={`acct-${row.name}-${key}`}>
+                  <Text dimColor>{`  ${key} `}</Text>
+                  <Text bold color={colorFor(w.percent)}>{`${w.percent}%`.padStart(4)}</Text>
+                  <Text dimColor>{` ${reset}`.padEnd(7)}</Text>
+                </Text>
+              )
+            })
+          )}
+          {isMe && <Text color="claude">{` ${t('you')}${row.isLive ? ` · ${t('live')}` : ''}`}</Text>}
+          {row.name === free?.name && <Text color={STATUS_GREEN}>{` ${t('next')}`}</Text>}
+        </Text>,
+      )
+    }
+    rows.push(
+      <Text key="acct-legend" wrap="truncate">
+        <Text color={STATUS_GREEN}>● </Text>
+        <Text dimColor>{`${t('available')}  `}</Text>
+        <Text color={STATUS_YELLOW}>● </Text>
+        <Text dimColor>{`${t('nearLimit')}  `}</Text>
+        <Text color={STATUS_RED}>● </Text>
+        <Text dimColor>{`${t('atLimit')} / ${t('unavailable')}`}</Text>
+      </Text>,
+    )
+    if (note !== '') {
+      rows.push(
+        <Text key="acct-note" color="warning" wrap="truncate">
+          {note}
+        </Text>,
+      )
+    }
+    rows.push(
+      <Box key="acct-actions" columnGap={2} flexShrink={0}>
+        <Button key={reg('accounts-refresh')} plain label={t('refresh')} onPress={() => refreshAccounts($, true)} />
+        <Text dimColor wrap="truncate">
+          {t('switchHint')}
+        </Text>
+      </Box>,
+    )
+  }
+
   const rowKeys = order.splice(0)
 
   // Tabs: plain words, the chosen one in the accent color and underlined.
@@ -1240,6 +1470,8 @@ async function drawPromptHintRow($: EngineInterface, e: RenderInput<'PromptHint'
     </Box>
   )
   const snapshot = (await read($, statusOn)) ? await read($, status) : null
+  const me = await read($, account)
+  const tagColor = me === null ? undefined : ACCOUNT_KIND_COLORS[me.kind]
 
   // The engine keeps its mode label (⏵⏵ auto mode on ·) in a column of its own
   // to the left of this tree, so the tree grows into the rest of one row: a
@@ -1247,6 +1479,11 @@ async function drawPromptHintRow($: EngineInterface, e: RenderInput<'PromptHint'
   if (snapshot === null) {
     return (
       <Box justifyContent="space-between" flexGrow={1} gap={1}>
+        {me !== null && (
+          <Box flexShrink={0}>
+            <Text color={tagColor}>{accountTag(me, true)}</Text>
+          </Box>
+        )}
         <Box flexShrink={1} flexGrow={1}>
           <Text dimColor wrap="truncate">
             {hintText(e.props.hint)}
@@ -1282,13 +1519,22 @@ async function drawPromptHintRow($: EngineInterface, e: RenderInput<'PromptHint'
   // One row beside the engine's mode label (about MODE_LABEL_COLUMNS wide):
   // the most detailed level that leaves room for the button; past the least
   // detailed one, the model and folder go too.
-  const room = columns - MODE_LABEL_COLUMNS - label.length - 4
+  // The account goes first and stays; its email gives way to the name when the row is tight.
+  const free = columns - MODE_LABEL_COLUMNS - label.length - 4
+  const tag = me === null ? '' : accountTag(me, free < 110)
+  const room = free - (tag === '' ? 0 : tag.length + 5)
   const fits = (d: Detail, withHead: boolean) =>
     statsWidth(`${ctxPercent}%${ctxTokens}`, limits, cacheText, d) + (withHead ? head.length + 5 : 0) <= room
   const showHead = fits(2, true)
   const detail: Detail = ([0, 1, 2] as const).find(d => fits(d, showHead)) ?? 2
 
   const stats = [
+    tag !== '' && (
+      <Text key="account">
+        <Text bold color={tagColor}>{tag}</Text>
+        {sep}
+      </Text>
+    ),
     showHead && (
       <Text key="head">
         <Text color={STATUS_CYAN}>{model}</Text>
@@ -1369,6 +1615,7 @@ function prettyModel(id: string) {
 
 // The status line's clock: reset countdowns and the cache state move with it.
 let statusTicker: Timer | undefined
+let accountsTicker: Timer | undefined
 
 // Zen's elapsed-time ticker, one per module load.
 let ticker: Timer | undefined
@@ -1434,6 +1681,7 @@ async function restore($: EngineInterface) {
   await loadSettings($)
   await loadThemes($)
   await loadStatus($)
+  await detectAccount($).catch(() => {})
   await loadSessionEffort($)
   try {
     await trackModel($, await $.session.model())
@@ -1458,6 +1706,8 @@ let paneWasFocused = false
 
 export const register: Register = on => {
 
+  // One session.end hook: the engine refuses a module that registers an
+  // event twice without a matcher.
   on('session.end', async ($, e, next) => {
     // This tab's Windows Terminal profile, or the terminal, gets its own
     // colors back. A /clear goes on in the same process and tab, so it keeps the theme.
@@ -1467,20 +1717,23 @@ export const register: Register = on => {
         else await paintOsc($, null)
       }
     } catch {}
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
-  // /clear: a new session, with the engine's defaults in every value and no
-  // session.start, so the kept settings (Zen, effort, the model's mark) come back here.
-  on('classic.SessionStart', async ($, e, next) => {
-    const ran = await next(e)
-    if (e.source === 'clear') {
+    const ended = await next(e)
+    // /clear: a new session, with the engine's defaults in every value and no
+    // session.start, so the kept settings (Zen, effort, the model's mark) come back here.
+    // Read at session.end, not classic.SessionStart: a plugin seated above this one
+    // (an organization's security plugin) can send classic.* events on past it.
+    if (e.reason === 'clear') {
       // The menu's pane outlives the session it was opened in: close it.
       await $.ui.close({ id: PANE }).catch(() => {})
-      await update($, menu, () => null)
-      await restore($)
+      // The new session's values start once this one has ended.
+      $.clock.after(500, () => {
+        void (async () => {
+          await update($, menu, () => null)
+          await restore($)
+        })().catch(() => {})
+      })
     }
-    return ran
+    return ended
   }).catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
@@ -1490,13 +1743,26 @@ export const register: Register = on => {
     statusTicker = $.clock.every(15_000, () => {
       void update($, statusClock, () => Date.now())
     })
+    void refreshAccounts($)
+      .then(() => warnNearLimit($))
+      .catch(() => {})
+    accountsTicker?.cancel()
+    accountsTicker = $.clock.every(5 * 60_000, () => {
+      void refreshAccounts($).catch(() => {})
+    })
     try {
       await $.tool.register({ name: ZEN_TOOL_NAME, description: ZEN_TOOL_DESCRIPTION, inputSchema: ZEN_TOOL_SCHEMA })
     } catch {}
     await $.command.register({
       name: 'tools',
       description: 'Open the claude-cli-mod menu: Zen mode, themes, mode and status line',
-      argumentHint: '[zen|themes|mode|status|debug]',
+      argumentHint: '[zen|themes|mode|status|accounts|debug]',
+      immediate: true,
+    })
+    await $.command.register({
+      name: 'contas',
+      description: "Accounts (claude-contas): which one this session runs on and every account's 5h and weekly limits; /contas atualizar checks them again",
+      argumentHint: '[atualizar]',
       immediate: true,
     })
     await $.command.register({
@@ -1529,12 +1795,37 @@ export const register: Register = on => {
       const rows = await $.config.list()
       return { text: rows.map(r => `${r.key} (${r.kind}) = ${JSON.stringify(r.value)}`).join('\n') }
     }
-    const panel: Panel = arg === 'themes' || arg === 'mode' || arg === 'status' ? arg : 'zen'
+    const panel: Panel =
+      arg === 'themes' || arg === 'mode' || arg === 'status' || arg === 'accounts' ? arg : arg === 'contas' ? 'accounts' : 'zen'
     if ((await read($, menu)) !== null) {
       await goTo($, panel)
       await refocusPane($, panel)
     } else await toggleMenu($, panel)
     return { text: 'claude-cli-mod is open.' }
+  })
+
+  // /contas: the Accounts tab and a text summary; `atualizar` asks every account again.
+  on('command.run', { command: 'contas' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase()
+    await detectAccount($).catch(() => {})
+    if ((await read($, menu)) !== null) {
+      await goTo($, 'accounts')
+      await refocusPane($, 'accounts')
+    } else await toggleMenu($, 'accounts')
+    await refreshAccounts($, ['atualizar', 'refresh', 'forcar', 'force'].includes(arg))
+    const me = await read($, account)
+    const all = await liveAccounts($)
+    const lng = await read($, lang)
+    const stateNames: Record<AccountState, Phrase> = { available: 'available', warning: 'nearLimit', limit: 'atLimit', error: 'unavailable' }
+    const lines = [me === null ? '?' : accountTag(me)]
+    for (const row of all?.rows ?? []) {
+      const windows = row.windows.map(w => `${w.key} ${w.percent}%`).join(' · ')
+      const state = phrase(lng, stateNames[row.state])
+      lines.push(`${row.name === me?.name ? '›' : ' '} ${row.name}: ${row.error ?? `${state} · ${windows}`}`)
+    }
+    const note = await read($, accountsNote)
+    if (note !== '') lines.push(note)
+    return { text: lines.join('\n') }
   })
 
   // The menu's pane.
@@ -1739,7 +2030,10 @@ export const register: Register = on => {
       const at = Date.now()
       await update($, lastResponseAt, () => at)
       await update($, statusClock, () => at)
-      if (await read($, statusOn)) void refreshStatus($).catch(() => {})
+      if (await read($, statusOn))
+        void refreshStatus($)
+          .then(() => warnNearLimit($))
+          .catch(() => {})
     }
     return answered
   })

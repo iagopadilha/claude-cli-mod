@@ -11,7 +11,7 @@ Mantido por [iagopadilha](https://github.com/iagopadilha).
 
 ## O que faz
 
-- **Menu `/tools`** com quatro abas: Zen, Mode, Theme e Status e Config. Cada seção mostra o valor atual
+- **Menu `/tools`** com cinco abas: Zen, Mode, Theme, Status e Config e Contas. Cada seção mostra o valor atual
   (`Atual: ...`) e marca com ✓ a opção escolhida.
 - **Modo Zen:** o Claude mostra só as mensagens de texto, e a faixa acima do prompt exibe o título da
   tarefa, uma barra de progresso, a porcentagem, o passo atual e os próximos. Antes de o Claude nomear a
@@ -22,6 +22,8 @@ Mantido por [iagopadilha](https://github.com/iagopadilha).
 - **Modelo, esforço (effort) e modo de permissão**, tanto o da sessão quanto o padrão das próximas sessões.
 - **Status line** com modelo, branch, contexto, limites de uso e estado do cache.
 - **Idioma** do menu em inglês ou português (na aba Status e Config).
+- **Contas:** diz em que conta a sessão roda e se é um token (aberto pelo `cc` do claude-contas) ou o seu
+  `/login`; lista os limites de 5h e da semana de todas as contas, quais estão disponíveis e qual é a mais livre.
 
 ## Instalação
 
@@ -40,7 +42,8 @@ Para atualizar depois, use o gerenciador de plugins (`/plugin`) e rode `/reload-
 | Comando | O que faz |
 | --- | --- |
 | `/tools` | Abre ou fecha o menu |
-| `/tools zen` · `themes` · `mode` · `status` | Abre direto numa aba |
+| `/tools zen` · `themes` · `mode` · `status` · `accounts` | Abre direto numa aba |
+| `/contas` · `/contas atualizar` | Abre a aba Contas e escreve o resumo; `atualizar` consulta todas as contas de novo |
 | `/zen hide` · `/zen show` | Esconde ou mostra os passos da faixa (a primeira linha continua) |
 | `/zen off` | Desliga o modo Zen |
 
@@ -52,6 +55,21 @@ menu está aberto e a caixa de texto está vazia. Digitar qualquer coisa fecha o
 Com o Zen ligado, o plugin pede ao Claude que monte um plano de 4 a 5 passos (mais em planos longos, como
 orquestrações e loops) e atualize a ferramenta `zen_progress` a cada passo que começa ou termina. A barra
 sobe conforme os passos são concluídos. A faixa mostra os próximos 5 passos pendentes e conta o resto.
+
+### Como a aba Contas funciona
+
+A aba lê o claude-contas, uma pasta local (padrão `~/Documents/claude-contas`) com `contas.json`, um token por
+conta (`claude setup-token`) e o `status.mjs`. O lançador `cc` abre o Claude com o token da conta escolhida e
+passa `CLAUDE_CONTA` e `CLAUDE_CONTAS_DIR`, por onde o mod sabe a conta e a pasta.
+
+- **Esta sessão:** `token <conta>` quando há `CLAUDE_CODE_OAUTH_TOKEN` no ambiente (sem `CLAUDE_CONTA`, a conta é
+  achada comparando o token com os arquivos do `contas.json`; o token nunca é mostrado nem guardado). Sem token,
+  `login <e-mail>` do `~/.claude.json`, e qual conta do claude-contas ele é (campo `email` da conta, ou o nome
+  igual à parte antes do `@`).
+- **Limites:** o mod roda `node status.mjs --json` ao abrir a sessão e a cada 5 minutos (o claude-contas guarda
+  a resposta por 2 minutos). A linha da conta atual usa os números da própria sessão (`ao vivo`), os mesmos da
+  status line. Passando de 90% da janela de 5h, um aviso indica a conta mais livre.
+- A conta atual também aparece no começo da status line (ou ao lado da dica, com a status line desligada).
 
 ## Onde ficam os dados
 

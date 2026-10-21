@@ -15,6 +15,7 @@ import {
 } from '../hooks/lib/palette'
 import { barCells, percentOf, stepLabel, visibleSteps } from '../hooks/lib/zen'
 import { backgroundPill, barFill, cacheState, CACHE_TTL_MS, colorFor, fmtDuration, fmtTokens } from '../hooks/lib/status'
+import { accountForEmail, accountTag, freest, parseEntries, parseSnapshot, withLive } from '../hooks/lib/accounts'
 
 const PLUGIN = 'claude-cli-mod'
 const SURFACES = ['terminal', 'desktop'] as const
@@ -340,14 +341,16 @@ describe('toolbox', () => {
     on('env.get', () => ({ value: '/home/me' }))
     on('fs.exists', () => ({ value: false }))
     on('session.model', () => ({ value: 'claude-sonnet-5-5' }))
-    on('classic.SessionStart', () => ({}))
+    on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+    const clock = mock.clock(on)
     const menu = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...pane })
     const corner = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...hint })
     await corner.press({ key: 'tools-toggle' })
     expect(await isChosen(menu, 'zen-off')).toBe(true)
 
-    await $.classic.SessionStart({ source: 'clear' })
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
     expect(closed).toEqual(['claude-tools'])
+    await clock.advance(600)
     await corner.press({ key: 'tools-toggle' })
     expect(await isChosen(menu, 'zen-on')).toBe(true)
     expect((await menu.find({ key: 'zen-theme-rainbow' }))?.text).toMatch(/rainbow ✓/)
@@ -394,9 +397,11 @@ describe('toolbox', () => {
     on('fs.write', () => ({ value: undefined }))
     on('config.list', () => ({ value: [{ key: 'theme', kind: 'enum', value: 'custom:claude-cli-mod', options: ['dark', 'custom:claude-cli-mod'] }] }) as never)
     on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }) as never)
-    on('classic.SessionStart', () => ({}))
+    on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+    const clock = mock.clock(on)
     // A /clear restores the kept settings, the saved themes among them.
-    await $.classic.SessionStart({ source: 'clear' })
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+    await clock.advance(600)
 
     const menu = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...pane })
     const corner = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...hint })
@@ -433,5 +438,120 @@ describe('toolbox', () => {
     expect(await progress.find({ text: /50%/ })).toBeDefined()
     expect(await progress.find({ text: /Step 2 of 4/ })).toBeDefined()
     expect(await progress.find({ text: /Fetch data/ })).toBeDefined()
+  })
+})
+
+// claude-contas' status.mjs --json, as it prints it.
+const CONTAS_JSON = JSON.stringify({
+  contas: [
+    { nome: 'work', arquivo: 'tokens/work.txt', email: 'work@example.com' },
+    { nome: 'alt', arquivo: 'tokens/alt.txt' },
+    { nome: 'spare', arquivo: 'tokens/spare.txt' },
+  ],
+})
+const STATUS_JSON = JSON.stringify({
+  atualizadoEm: '2026-10-21T19:47:05.083Z',
+  melhor: 'alt',
+  contas: [
+    {
+      nome: 'work',
+      status: 'allowed',
+      janelas: [
+        { chave: '5h', pct: 15.000000000000002, resetEm: '2026-10-21T20:10:00.000Z' },
+        { chave: '7d', pct: 35, resetEm: '2026-10-25T09:00:00.000Z' },
+      ],
+    },
+    { nome: 'alt', status: 'allowed', janelas: [{ chave: '5h', pct: 1, resetEm: null }, { chave: '7d', pct: 33, resetEm: null }] },
+    { nome: 'spare', erro: 'organização não libera uso por assinatura' },
+  ],
+})
+
+describe('accounts', () => {
+  test('reads status.mjs output, rounding each window', async () => {
+    const snapshot = parseSnapshot(STATUS_JSON)
+    expect(snapshot.best).toBe('alt')
+    expect(snapshot.rows.map(r => r.state)).toEqual(['available', 'available', 'error'])
+    expect(snapshot.rows[0]!.windows.map(w => w.percent)).toEqual([15, 35])
+    expect(snapshot.rows[2]!.error).toBe('organização não libera uso por assinatura')
+  })
+
+  test("the session's own limits replace the probe of the account it runs on", async () => {
+    const live = withLive(parseSnapshot(STATUS_JSON), 'work', [
+      { label: '5h', percent: 92, resetsAt: 1 },
+      { label: '7d', percent: 36, resetsAt: 2 },
+    ])
+    expect(live.rows[0]!.isLive).toBe(true)
+    expect(live.rows[0]!.state).toBe('warning')
+    expect(live.rows[0]!.windows.map(w => w.percent)).toEqual([92, 36])
+    expect(live.rows[1]!.isLive).toBe(false)
+    expect(freest(live, 'work')?.name).toBe('alt')
+  })
+
+  test('a /login email names its claude-contas account', async () => {
+    const entries = parseEntries(CONTAS_JSON)
+    expect(accountForEmail(entries, 'WORK@example.com')).toBe('work')
+    expect(accountForEmail(entries, 'alt@example.com')).toBe('alt')
+    expect(accountForEmail(entries, 'someone@else.com')).toBeNull()
+    expect(accountTag({ kind: 'token', name: 'alt', email: null, org: null })).toBe('token alt')
+    expect(accountTag({ kind: 'login', name: 'work', email: 'work@example.com', org: null }, true)).toBe('login work')
+  })
+
+  // /contas, typed at the prompt.
+  const contas = {
+    command: 'contas',
+    args: '',
+    origin: { kind: 'composer' as const },
+    presentation: { isFullscreen: true, columns: 160 },
+  }
+
+  // A session cc opened: the token in the environment, the account named beside it.
+  const ccSession = (on: On, env: Record<string, string>) => {
+    mock.store(on, { statusOn: false })
+    on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'engine' }))
+    on('ui.open', () => ({ value: { isPlaced: true as const } }))
+    on('ui.close', () => ({ value: undefined }))
+    on('env.get', (_$, { name }) => ({ value: env[name] }))
+    on('fs.exists', () => ({ value: true }))
+    on('fs.read', (_$, { path }) => ({
+      value: path.endsWith('contas.json')
+        ? CONTAS_JSON
+        : path.endsWith('.claude.json')
+          ? JSON.stringify({ oauthAccount: { emailAddress: 'work@example.com', organizationName: 'Example' } })
+          : path.endsWith('alt.txt')
+            ? 'tok-alt\n'
+            : '',
+    }))
+    on('process.run', () => ({ value: { exitCode: 0, stdout: STATUS_JSON, stderr: '' } }) as never)
+  }
+
+  test('/contas names the token account and lists every account', async ($, on) => {
+    ccSession(on, { HOME: '/home/me', CLAUDE_CODE_OAUTH_TOKEN: 'tok-alt', CLAUDE_CONTA: 'alt' })
+    const menu = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...pane })
+    const corner = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...hint })
+    const answer = await $.command.run(contas)
+    expect((answer as { text?: string }).text).toMatch(/^token alt/)
+    expect(await corner.find({ text: /token alt/ })).toBeDefined()
+    expect(await menu.find({ text: /claude-contas token · alt/ })).toBeDefined()
+    expect(await menu.find({ text: /not by your \/login/ })).toBeDefined()
+    expect(await menu.find({ text: /work.*15%.*35%/ })).toBeDefined()
+    expect(await menu.find({ text: /spare.*organização não libera/ })).toBeDefined()
+    expect(await menu.find({ key: 'accounts-refresh' })).toBeDefined()
+  })
+
+  test('a token started without cc is matched to its token file', async ($, on) => {
+    ccSession(on, { HOME: '/home/me', CLAUDE_CODE_OAUTH_TOKEN: 'tok-alt' })
+    const corner = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...hint })
+    await $.command.run(contas)
+    expect(await corner.find({ text: /token alt/ })).toBeDefined()
+  })
+
+  test('without a token the /login account shows, and which claude-contas account it is', async ($, on) => {
+    ccSession(on, { HOME: '/home/me' })
+    const menu = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...pane })
+    const corner = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', ...hint })
+    await $.command.run(contas)
+    expect(await corner.find({ text: /login work/ })).toBeDefined()
+    expect(await menu.find({ text: /your own \/login · work@example\.com/ })).toBeDefined()
+    expect(await menu.find({ text: /same account as work/ })).toBeDefined()
   })
 })
