@@ -112,7 +112,9 @@ const paneSize = (panel: Panel) => ({ rows: PAGE_ROWS[panel], columns: PANE_SIZE
 const PANE_BACKGROUND = '#0b0b0b'
 const MENU_NAME = 'claude-cli-mod'
 // Room the engine's own mode label takes left of the hint row (⏵⏵ auto mode on · ).
-const MODE_LABEL_COLUMNS = 48
+// Sized for the usual one (⏵⏵ auto mode on · ); a wider label only truncates the
+// row's end, where reserving more hid the bars and resets with room to spare.
+const MODE_LABEL_COLUMNS = 18
 // The slug of the Claude Code theme the mod writes: ~/.claude/themes/claude-cli-mod.json.
 const CLAUDE_THEME = 'claude-cli-mod'
 
@@ -1497,7 +1499,7 @@ async function drawPromptHintRow($: EngineInterface, e: RenderInput<'PromptHint'
   const now = await read($, statusClock)
   const cache = cacheState(await read($, lastResponseAt), now)
   const columns = e.viewport?.columns ?? 120
-  const sep = <Text dimColor>{'  │  '}</Text>
+  const sep = <Text dimColor>{' │ '}</Text>
   const bar = (percent: number, color: string) => (
     <Text>
       <Text color={color}>{'█'.repeat(barFill(percent))}</Text>
@@ -1520,11 +1522,11 @@ async function drawPromptHintRow($: EngineInterface, e: RenderInput<'PromptHint'
   // the most detailed level that leaves room for the button; past the least
   // detailed one, the model and folder go too.
   // The account goes first and stays; its email gives way to the name when the row is tight.
-  const free = columns - MODE_LABEL_COLUMNS - label.length - 4
+  const free = columns - MODE_LABEL_COLUMNS - label.length - 3
   const tag = me === null ? '' : accountTag(me, free < 110)
-  const room = free - (tag === '' ? 0 : tag.length + 5)
+  const room = free - (tag === '' ? 0 : tag.length + 3)
   const fits = (d: Detail, withHead: boolean) =>
-    statsWidth(`${ctxPercent}%${ctxTokens}`, limits, cacheText, d) + (withHead ? head.length + 5 : 0) <= room
+    statsWidth(`${ctxPercent}%${ctxTokens}`, limits, cacheText, d) + (withHead ? head.length + 3 : 0) <= room
   const showHead = fits(2, true)
   const detail: Detail = ([0, 1, 2] as const).find(d => fits(d, showHead)) ?? 2
 
@@ -1569,12 +1571,13 @@ async function drawPromptHintRow($: EngineInterface, e: RenderInput<'PromptHint'
   ]
 
   const statsRow = (
-    <Box justifyContent="space-between" flexGrow={1} gap={1}>
-      <Box flexShrink={1} flexGrow={1}>
+    // The button follows the stats, so no gap opens between them on a wide row.
+    <Box flexGrow={1}>
+      <Box flexShrink={1}>
         <Text wrap="truncate">{stats}</Text>
       </Box>
       <Box flexShrink={0}>
-        <Text dimColor>│</Text>
+        <Text dimColor>{' │'}</Text>
       </Box>
       {button}
     </Box>

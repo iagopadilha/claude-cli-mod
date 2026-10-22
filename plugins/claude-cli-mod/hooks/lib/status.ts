@@ -60,7 +60,7 @@ export const statsWidth = (
   detail: Detail,
 ): number => {
   const bar = detail === 0 ? BAR_WIDTH + 1 : 0
-  const sep = 5
+  const sep = 3
   let width = 4 + bar + ctxText.length
   for (const l of limits) width += sep + l.label.length + 1 + bar + l.percentText.length + (detail < 2 ? l.resetText.length : 0)
   if (cacheText !== '') width += sep + cacheText.length
